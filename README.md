@@ -46,6 +46,53 @@ python packaging/build.py
 
 GitHub Actions の「build」ワークフローを手動で実行する（または `v*` タグを push する）と、両 OS 版が成果物（Artifacts）として作られます。
 
+### Ubuntu 版の取得から実行まで（GitHub Actions を使う場合）
+
+#### 1. GitHub でビルドする
+
+1. GitHub のリポジトリを開き、上部の **「Actions」** タブを開く。
+2. 左の一覧から **「build」** を選ぶ。
+3. 一覧の上の帯の右端にある **「Run workflow」** を押し、Branch が `main` のまま緑の **「Run workflow」** を押す。
+4. 一覧に実行中の行が出る。5〜10 分ほどで完了する（緑のチェックが成功、赤い × が失敗）。
+
+#### 2. ダウンロードする
+
+1. 完了した行をクリックする。
+2. ページ下部の **「Artifacts」** にある **`TraceabilityTool-linux`** をクリックすると、`TraceabilityTool-linux.zip` がダウンロードされる（GitHub へのログインが必要）。
+   - Windows でダウンロードした場合は、この zip を**展開せずに**そのまま Ubuntu へコピーする。Windows で展開すると実行権限が失われるため。
+   - 成果物の保存期間は 90 日。過ぎたらもう一度ビルドする。
+
+#### 3. Ubuntu で展開する
+
+zip の中に `TraceabilityTool-linux.tar.gz` が入っている（実行権限を保つため tar.gz にまとめている）。端末で次を実行する。
+
+```bash
+# unzip が無ければ入れる（初回のみ）
+sudo apt install -y unzip
+
+unzip TraceabilityTool-linux.zip
+tar -xzf TraceabilityTool-linux.tar.gz
+```
+
+`TraceabilityTool-linux/` フォルダができる。このフォルダは好きな場所に移動して構わない（例: `~/apps/TraceabilityTool-linux`）。不要になった `TraceabilityTool-linux.zip` と `TraceabilityTool-linux.tar.gz` は消してよい。
+
+#### 4. 起動する
+
+```bash
+cd TraceabilityTool-linux
+./TraceabilityTool
+```
+
+- ブラウザで `http://127.0.0.1:8765/` が開く。開かない場合（GUI の無い環境など）は、端末に表示された URL を同じ PC のブラウザで開く。
+- 終了は端末で `Ctrl + C`。
+- `許可がありません`（Permission denied）と出た場合は、一度だけ `chmod +x TraceabilityTool` を実行する。
+- `ポート 8765 は…使用中です` と出た場合は、`./TraceabilityTool --port 8800` のように別のポートを指定する。
+- データは `~/TraceabilityTool/data` に保存される（ツールのフォルダを差し替えても残る）。
+
+使い方は、フォルダ内の `操作マニュアル.md` を参照。
+
+> Ubuntu 22.04 以降で動作する（GitHub Actions では Ubuntu 22.04 でビルドしている）。それより古い Ubuntu では動かない。
+
 ## 開発環境
 
 Python 3.11 以上が必要です。
