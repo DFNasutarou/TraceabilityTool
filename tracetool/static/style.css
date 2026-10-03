@@ -185,3 +185,10 @@ ul.links li.inactive .link-actions { text-decoration: none; }
   .split-side { width: 100%; }
   .form-grid { grid-template-columns: 1fr; }
 }
+
+/* カラム定義: 詳細設定の内容が増えても、列名・ファイルの列の入力欄が縮まないよう幅を固定する */
+.schema-editor .col-name { width: 200px; min-width: 200px; }
+.schema-editor .col-src { width: 200px; min-width: 200px; }
+.schema-editor .delims { display: inline-flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; }
+.schema-editor .delims label.check { margin-right: 0; }
+.schema-editor .delims input.short { width: 80px; }

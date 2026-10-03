@@ -1,0 +1,190 @@
+﻿設計ID,分類,対象,設計内容,実装箇所,上位要件
+TEC-01,技術構成,言語,Python 3.11 以上を使う。,pyproject.toml,C-02;C-05
+TEC-02,技術構成,Web サーバ,FastAPI + uvicorn を使う。型付き API とファイルアップロードの扱いが容易なため。,tracetool/app.py;tracetool/__main__.py,C-02
+TEC-03,技術構成,DB,SQLite（標準ライブラリ sqlite3）を使う。単一ファイルでインストール不要、トランザクションがあるため。,tracetool/db.py,F-20;F-21;F-22
+TEC-04,技術構成,Excel 読み書き,openpyxl を使う。.xlsx の結合セル情報を取得できるため。,tracetool/readers.py;tracetool/services/export.py,F-10;F-14
+TEC-05,技術構成,文字コード判定,自前で判定する（UTF-8 BOM → UTF-8 → CP932 の順にデコードを試す）。依存を増やさないため。,tracetool/readers.py,F-11
+TEC-06,技術構成,画面,"Vue 3（vue.global.prod.js をリポジトリに同梱）と素の ES Modules で作る。ビルド不要・CDN 不使用。
+同梱ファイルは npm 公式パッケージ vue@3.5.43 から取得し、整合性ハッシュを確認した（取得元と SHA-256 は README に記録）。",tracetool/static/vendor/vue.global.prod.js;tracetool/static/index.html,C-03;C-05
+STA-01,起動,起動コマンド,"python -m tracetool [--data-dir PATH] [--port 8765] [--no-browser]
+配布版は実行ファイル（TraceabilityTool.exe / TraceabilityTool）に同じ引数を渡せる。",tracetool/__main__.py;packaging/entry.py,N-06;F-20
+STA-02,起動,待ち受けアドレス,127.0.0.1 にのみバインドする。,tracetool/__main__.py,N-03;C-02
+STA-03,起動,ブラウザ,起動後に既定ブラウザで http://127.0.0.1:<port>/ を開く。,tracetool/__main__.py,N-06
+STA-04,起動,データフォルダ,"既定値は %USERPROFILE%\TraceabilityTool\data（Ubuntu は ~/TraceabilityTool/data）。
+リポジトリ配下にも配布フォルダ内にも置かない。機密データを誤ってコミットしないため。また配布フォルダを差し替えて更新してもデータが残るようにするため。
+フォルダには tracetool.db と logs/ だけを置くので、フォルダごとコピーすればバックアップになる。",tracetool/__main__.py,F-20;F-22;C-01
+STA-05,起動,ポートの確認,"起動前にポートが空いているか確認し、使用中なら理由を表示して終了する。exe をダブルクリックした場合は Enter を押すまで待ち、メッセージを読めるようにする。
+コンソールの文字コードで表せない文字は置き換えて表示する（英語版 Windows で落ちないように）。",tracetool/__main__.py,N-06;C-07
+DST-01,配布,リポジトリと配布フォルダ,開発用リポジトリと配布フォルダを分ける。配布フォルダには、実行に必要なものと利用者向けの操作マニュアルだけを入れる（設計書・テスト・ソースは入れない）。,packaging/build.py,C-08
+DST-02,配布,ビルド,"python packaging/build.py で、実行した OS 向けの配布フォルダ dist/TraceabilityTool-<windows|linux>/ を作る。PyInstaller（onedir）を使い、利用者の PC に Python を不要にする。
+PyInstaller はクロスビルドできないため、Windows 版は Windows、Ubuntu 版は Ubuntu でビルドする。",packaging/build.py;packaging/entry.py,C-05;C-07;C-08
+DST-03,配布,GitHub Actions,".github/workflows/build.yml で Windows 版（windows-latest）と Ubuntu 版（ubuntu-22.04）を作る。手動実行または v* タグの push で動く。
+Ubuntu 版は実行権限を保つため tar.gz にまとめる。Windows ランナーは文字コードが cp1252 のため PYTHONUTF8=1 にする。",.github/workflows/build.yml,C-07;C-08
+DST-04,配布,配布フォルダの構成,実行ファイル（TraceabilityTool.exe / TraceabilityTool）、_internal/（Python 実行環境・ライブラリ・画面ファイル）、packaging/user_files/ の中身（操作マニュアル）。,packaging/build.py;packaging/user_files/操作マニュアル.md,C-08
+DST-05,配布,git の管理対象,build/ と dist/ は git の管理外。取り込み元になりうる *.xlsx / *.csv なども除外する（docs/ の設計書 CSV は例外）。,.gitignore,C-01
+STR-01,構成,ディレクトリ構成,"tracetool/
+  __main__.py   起動処理（引数解析、uvicorn 起動、ブラウザを開く）
+  app.py        FastAPI アプリ生成、API 定義、静的ファイル配信
+  db.py         接続、スキーマ作成・マイグレーション、トランザクション、キャッシュ
+  colschema.py  カラム定義の型・検証、値の正規化、ハッシュ計算
+  readers.py    CSV / TSV / XLSX を「ヘッダ＋行の文字列配列」に変換
+  importer.py   取り込みセッション、列の対応付け、検証、確定
+  services/     documents / versions / items / relations / links / trace / diff / export
+  static/       index.html、app.js、router.js、api.js、views/*.js、style.css、vendor/
+packaging/      build.py、entry.py、user_files/
+tests/
+docs/           要件定義書・詳細設計書（このツールで読み込める CSV）
+API はルータに分割せず app.py に直接定義する。",tracetool/,C-02
+DAT-01,データモデル,カラム定義（JSON）,"文書の「作業中のカラム定義」と、各版の「取り込み時点のカラム定義」は同じ JSON 形式で保存する。
+{""columns"": [{""key"": ""c1a2b3"", ""name"": ""要件ID"", ""source_header"": ""要件ID"", ""type"": ""id"", ""list"": null, ""enum_values"": null, ""bool_values"": null, ""ref_document_id"": null}, ...], ""display_column"": null}
+name: 表示名。source_header: 取り込み元ファイルのヘッダ名（列の自動対応付けに使う）。type: id / int / string / enum / bool。",tracetool/colschema.py,F-02;F-05;T-04
+DAT-02,データモデル,列の内部キー,key は作成時にランダムな文字列を割り当て、以後変えない。差分・ハッシュはこのキーで行う。,tracetool/colschema.py;tracetool/static/views/schema-editor.js,F-06
+DAT-03,データモデル,型の制約,id 型の列はちょうど 1 つ。id 型はリスト形式にできない。ref_document_id は string 型にのみ指定でき、自分自身は指定できない。enum は選択肢が 1 つ以上必要。,tracetool/colschema.py;tracetool/services/documents.py,F-02;F-03;F-04
+DAT-04,データモデル,リスト形式,"list: {""delimiters"": [...]} で区切り文字の配列を持つ。改行・タブは文字そのもの（\n・\t）で保存する。
+画面では改行とタブをチェックボックスで指定し、それ以外の区切り文字はスペース区切りで入力する（空白そのものは \s と書く）。",tracetool/colschema.py;tracetool/static/views/schema-editor.js,F-03
+DAT-05,データモデル,bool の真偽文字列,"bool_values: {""true"": [...], ""false"": [...]}。既定値は true: ○ ◯ 〇 Yes Y TRUE 1 有 あり、false: × ✕ ✖ No N FALSE 0 無 なし。
+比較は Unicode NFKC 正規化と大文字小文字の無視（casefold）をしたうえで行う。真と偽に同じ文字列がある定義はエラー。",tracetool/colschema.py,F-02
+DAT-06,データモデル,参照 ID 列,ref_document_id に参照先の文書 ID を持つ。この文書と参照先文書の間にトレース関係があることが取り込みの条件。,tracetool/colschema.py;tracetool/importer.py,F-04
+DAT-07,データモデル,表示列,display_column に「ID と一緒に表示する列」のキーを持つ。未指定なら ID 列の次の列。リンク一覧や出力で使う。,tracetool/colschema.py,F-62;F-70
+DAT-08,データモデル,値の正規化（共通・リスト）,"前後の空白を除去し、空文字は null にする。
+リスト形式は区切り文字で分割し、各要素の前後の空白を除去し、空要素を捨てて配列にする。要素ごとに型の変換を行う。
+id / string は文字列のまま。",tracetool/colschema.py,F-03;F-16
+DAT-09,データモデル,値の正規化（int）,"NFKC 正規化（全角数字→半角）、桁区切りの , を除去、1.0 のような整数値の小数は許可して整数にする。float を経由しない（2^53 を超える値の精度を保つため）。
+変換できなければ元の文字列のまま保存し、警告にする。",tracetool/colschema.py,F-02;F-16
+DAT-10,データモデル,値の正規化（bool・enum）,"bool は bool_values と照合して true / false にする。enum は選択肢と完全一致を確認する。
+どちらも一致しなければ元の文字列のまま保存し、警告にする。",tracetool/colschema.py,F-02;F-16
+DAT-11,データモデル,警告セルの記録,警告になったセル（型変換の失敗、参照先に無い ID）は、項目の invalid に列キーを記録し、画面で強調表示する。,tracetool/importer.py;tracetool/static/views/items.js,F-16
+DAT-12,データモデル,内容ハッシュ,"content_hash = sha256( JSON.dumps( {列キー: 正規化後の値  ※値が null の列は除く}, sort_keys=True, ensure_ascii=False ) )
+全列が対象（備考列を含む）。列名の変更ではハッシュは変わらない（キーで持つため）。null の列を除外するので、空の列を追加しても既存項目のハッシュは変わらない。",tracetool/colschema.py,F-45
+DAT-13,データモデル,テーブル: meta / documents,"meta(key TEXT PRIMARY KEY, value TEXT)  -- schema_version、版番号の最大値など
+documents(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, description TEXT, schema_json TEXT NOT NULL  -- 作業中のカラム定義, sort_order INTEGER, created_at TEXT)",tracetool/db.py,F-01;F-21;T-01
+DAT-14,データモデル,テーブル: versions,"versions(id INTEGER PRIMARY KEY AUTOINCREMENT, document_id → documents ON DELETE CASCADE, version_no INTEGER  -- 文書内で 1 から連番, label TEXT, source_filename TEXT, import_settings TEXT  -- JSON: 形式・文字コード・ヘッダ行・シート, schema_json TEXT  -- 取り込み時点のカラム定義, row_count INTEGER, imported_at TEXT, UNIQUE(document_id, version_no))
+最新版は version_no が最大のもの。",tracetool/db.py,F-05;F-17;F-46;T-02
+DAT-15,データモデル,テーブル: items,"items(version_id → versions ON DELETE CASCADE, item_id TEXT  -- ID 列の値, row_no INTEGER  -- 取り込み順, data_json TEXT  -- {列キー: 正規化後の値}, invalid_json TEXT  -- 警告になった列キー, content_hash TEXT, PRIMARY KEY(version_id, item_id))
+元ファイルは保存せず、変換後の値だけを保存する。",tracetool/db.py,F-18;F-21;T-03
+DAT-16,データモデル,テーブル: relations,"relations(id INTEGER PRIMARY KEY AUTOINCREMENT, upper_doc_id → documents ON DELETE CASCADE, lower_doc_id → documents ON DELETE CASCADE, UNIQUE(upper_doc_id, lower_doc_id), CHECK(upper_doc_id <> lower_doc_id))",tracetool/db.py,F-40;T-05
+DAT-17,データモデル,テーブル: links,"links(id INTEGER PRIMARY KEY AUTOINCREMENT, relation_id → relations ON DELETE CASCADE, upper_item_id TEXT, lower_item_id TEXT, manual INTEGER  -- 手動で追加, auto_by_upper INTEGER  -- 上位文書の参照 ID 列から生成, auto_by_lower INTEGER  -- 下位文書の参照 ID 列から生成, auto_disabled INTEGER  -- 自動リンクを利用者が無効化, upper_hash_ack TEXT, lower_hash_ack TEXT  -- 確認時点のハッシュ, created_at TEXT, UNIQUE(relation_id, upper_item_id, lower_item_id))
+リンクは文書とは別に、項目 ID の組で持つ（多対多）。種別・コメントは持たない。",tracetool/db.py,F-41;F-44;T-06;X-04;G-01
+DAT-18,データモデル,ID の再利用防止と DB の移行,"ID 列は AUTOINCREMENT にし、削除した文書・版・関係・リンクの ID を再利用しない（再利用すると、残っている参照が無関係の新しい行を指すため）。版番号も meta に最大値を残し、削除しても再利用しない。
+スキーマ版 1 の DB は、起動時に表を作り直して版 2 に移行する。",tracetool/db.py;tracetool/importer.py,F-01;F-17;F-32
+DAT-19,データモデル,文書の削除,文書を削除するときは、他の文書の作業中カラム定義にある、その文書への ref_document_id を外す。削除の確認画面で、影響を受ける文書名を表示する。,tracetool/services/documents.py;tracetool/static/views/docsettings.js,F-01
+DAT-20,データモデル,接続とキャッシュ,"SQLite の接続は 1 本を共有し、ロックで直列化する（個人利用で同時編集は無いため）。
+版 ID → 項目一覧・ハッシュ表をキャッシュする。版は不変なので、版・文書の削除時とロールバック時のみ破棄する。
+トレース評価の結果（関係ごと・文書ごと）は、書き込みのトランザクションのたびに破棄する。
+項目一覧の検索・ソート・絞り込みは、版単位で項目をメモリに読み込んで Python 側で行う。",tracetool/db.py;tracetool/services/versions.py;tracetool/services/trace.py,N-02;C-04;C-06;X-01
+DAT-21,データモデル,リンクの有効判定,"1 つの（上位項目, 下位項目）の組に対してリンク行は 1 行だけとし、生成元をフラグで持つ。
+有効 = manual OR ((auto_by_upper OR auto_by_lower) AND NOT auto_disabled)",tracetool/services/links.py,F-42;F-43
+DAT-22,データモデル,リンクの操作規則,"手動で追加: 行が無ければ作成。manual=1、auto_disabled=0、確認ハッシュに現在のハッシュを設定する。
+手動で削除: manual=0。自動フラグが立っていれば auto_disabled=1（無効化）。すべてのフラグが 0 になったら行を削除する。
+元に戻す: auto_disabled=0。
+確認済みにする: 確認ハッシュを両項目の最新版のハッシュで更新する。
+auto_disabled の行は、自動フラグが残っている間は保持する（再取り込み後も無効化を維持する）。",tracetool/services/links.py,F-43;F-45
+PRC-01,処理,取り込みセッション,"取り込みはセッション単位で進める。アップロードされたファイルはメモリ上にのみ保持し、ディスクには書かない。
+セッションは確定・取り消し・30 分の無操作で破棄する（60 秒ごとに期限切れを掃除する）。読み込んだ表はセッション内でキャッシュする。",tracetool/importer.py,F-18;C-01
+PRC-02,処理,取り込みの流れ,"1. POST /api/imports: ファイルをアップロード → セッション ID、形式、シート一覧、先頭 30 行の生データ
+2. PUT /api/imports/{sid}/settings: 文字コード・ヘッダ行・シート（複数可）を指定 → ヘッダ一覧、列の対応付け案
+3. PUT /api/imports/{sid}/validate: カラム定義（各列の source_header を含む）を指定 → 検証結果、プレビュー
+4. POST /api/imports/{sid}/commit: ラベルを指定して確定 → 新しい版を作成
+DELETE /api/imports/{sid}: 取り消し",tracetool/importer.py;tracetool/app.py,F-15;F-16;F-17
+PRC-03,処理,CSV / TSV の読み込み,csv モジュールで読む。セル内の改行（引用符で囲まれたもの）に対応する。文字コードは指定がなければ UTF-8 BOM → UTF-8 → CP932 の順にデコードを試す。,tracetool/readers.py,F-10;F-11
+PRC-04,処理,XLSX の読み込み,"openpyxl で data_only=True（数式は計算済みの値）で開く。結合セルは merged_cells.ranges から結合範囲内の全セルに左上の値を展開する。
+日付は YYYY-MM-DD（時刻があれば YYYY-MM-DD HH:MM:SS）、整数値の float は整数の文字列にする。
+書式だけが下の方まで設定されたシートで読み込みが膨らまないよう、値のあるセルと結合範囲から読む範囲を決める。",tracetool/readers.py,F-10;F-14
+PRC-05,処理,複数シート,各シートでヘッダ行の位置が同じである前提で、行を順に連結する。ヘッダが一致しないシートがあればエラーとする。,tracetool/readers.py,F-13
+PRC-06,処理,ヘッダ行と空行,"指定したヘッダ行を見出しとし、その次の行からをデータとする。全セルが空の行は捨てる。1 行を 1 項目として扱う。
+空の見出しには「列N」を付け、重複する見出しには (2)、(3)… を付ける（付けた名前が既存の見出しと衝突しないようにする）。",tracetool/readers.py,F-12;X-03
+PRC-07,処理,未対応の形式,旧形式の .xls は、.xlsx で保存し直すよう案内するエラーにする。対応形式は .csv .txt .tsv .xlsx .xlsm。,tracetool/readers.py,X-02;F-10
+PRC-08,処理,列の対応付け,"1. ファイルのヘッダごとに、カラム定義の source_header と一致する列を探す。無ければ name と一致する列を探す。
+2. 一致しないヘッダは画面で「新しい列として追加（既定は string 型）」できる。追加しなければ取り込まない。
+3. ファイルに対応するヘッダが無い列は「今回は値なし」とし、警告を出す。
+4. カラム定義が空の初回取り込みは、全ヘッダを string 列として提案し、先頭を ID 列にする。
+5. 確定時に、変更後のカラム定義を文書の作業中定義として保存し、同じものを版にも保存する。
+取り込み画面で前のステップに戻っても、編集したカラム定義は保持し、ファイルの列との対応付けだけを更新する。",tracetool/importer.py;tracetool/static/views/import.js,F-15;F-05
+PRC-09,処理,検証,"エラー（確定できない）: カラム定義の誤り / ID 列が無い / ID 列が対応付けられていない / ID の空欄 / ID の重複 / 複数シートのヘッダ不一致 / 参照 ID 列の参照先とのトレース関係が無い
+警告（確定できる）: 整数に変換できない / bool に変換できない / 定義外の enum 値 / 参照 ID が参照先文書の最新版に存在しない / 参照先文書が未取り込み / ファイルに無い列がある
+エラー・警告は件数と該当行（最大 1,000 件）を表示する。",tracetool/importer.py,F-16
+PRC-10,処理,確定,1 トランザクションで行う: versions に行を追加 → items に全行を一括挿入 → documents.schema_json を更新 → 自動リンクを再生成（PRC-13）→ コミット。途中で例外が起きたらロールバックする。,tracetool/importer.py;tracetool/db.py,N-04;N-01;F-17
+PRC-11,処理,版の削除,最新版を削除した場合は、その文書の自動リンクを新しい最新版から再生成する（PRC-13）。版が 1 つも無くなった場合は、その文書が生成元の自動フラグをすべて 0 にする。,tracetool/services/versions.py;tracetool/app.py,F-32
+PRC-12,処理,トレース関係の作成・削除,"作成時は循環しないことを確認する（下位から上位へたどれる場合はエラー）。作成時に両文書の自動リンクを再生成する。
+関係を削除すると、その関係のリンクはすべて削除される（ON DELETE CASCADE）。",tracetool/services/relations.py;tracetool/app.py,F-40
+PRC-13,処理,自動リンクの再生成,"文書 D の最新版を対象に、D の参照 ID 列ごとに次を行う。
+1. 参照先文書 R と D の間のトレース関係を特定する（D が上位なら auto_by_upper、下位なら auto_by_lower）。
+2. D の各項目について、参照 ID 列の値（リスト形式なら各要素）から（上位 ID, 下位 ID）の組の集合 S を作る。
+3. 既存のリンクのうち、該当フラグが 1 で S に含まれない行はフラグを 0 にする（すべてのフラグが 0 で manual=0 なら行を削除）。
+4. S に含まれる組は、行が無ければ作成し、該当フラグを 1 にする。新しい行の確認ハッシュは現在のハッシュ。既存行の確認ハッシュと auto_disabled は変えない。
+取り込みの確定時、版の削除時、関係の作成時に行う。",tracetool/services/links.py,F-42;F-44
+PRC-14,処理,確認ハッシュの補完,"PRC-13 の後に、確認ハッシュが空（NULL）のリンクのうち、D 側の項目が D の最新版に存在するものに現在のハッシュを入れる。
+リンクを作った時点で相手の項目がまだ無かった場合（相手文書が未取り込み、リンク切れのまま作成・確認した場合）、確認ハッシュは空になる。項目が現れた時点のハッシュを基準にしないと、取り込みの順番だけでリンクが要確認になってしまうため。",tracetool/services/links.py,F-45
+PRC-15,処理,トレースの評価,"トレース関係 (U → L) ごとに、U と L の最新版を使って計算する。
+上位未トレース（下位なし）: U の項目で、有効なリンクのうち下位項目が L の最新版に存在するものが 0 本
+下位未トレース（上位なし）: L の項目で、有効なリンクのうち上位項目が U の最新版に存在するものが 0 本
+リンク切れ: 有効なリンクで、上位項目または下位項目が最新版に存在しない
+要確認: 有効なリンクで、両項目とも存在し、どちらかの最新ハッシュが確認ハッシュと異なる（未トレースとは別に数える）
+過去の版を指定した評価は行わない。",tracetool/services/trace.py,F-46;F-50;F-52;X-05;X-06;G-02
+PRC-16,処理,網羅率,網羅率 = （未トレースでない項目数）/（項目数）。上位側・下位側それぞれ計算する。,tracetool/services/trace.py,F-51
+PRC-17,処理,項目ごとのトレース状態,項目に複数の上位文書（または下位文書）がある場合は関係ごとに判定し、「いずれかの関係で未トレース」を未トレース（上位なし・下位なし）とする。上位・下位のリンク数、要確認・リンク切れの数も項目ごとに数える。,tracetool/services/trace.py;tracetool/services/items.py,F-63
+PRC-18,処理,差分（列）,版 A（旧）と版 B（新）の列を列キーで比較し、追加 / 削除 / 名前変更 / 型変更を求める。,tracetool/services/diff.py,F-31;F-06
+PRC-19,処理,差分（項目）,"項目を ID で比較する。B にのみある → 追加、A にのみある → 削除、両方にありハッシュが異なる → 変更（値が異なる列キーとその前後の値）、ハッシュが同じ → 変更なし。
+値の比較は型を含めて行う（Python では 1 == True のため、JSON 表現で比べる）。",tracetool/services/diff.py,F-31
+PRC-20,処理,出力: トレースマトリクス,関係を指定する。1 行 1 リンク: 上位 ID、上位の表示列、下位 ID、下位の表示列、生成元（手動/自動）、状態（正常/要確認/リンク切れ）。下位なし・上位なしの項目も相手側を空欄にして含める。,tracetool/services/export.py,F-70
+PRC-21,処理,出力: 未トレース一覧,「集計」シート（関係ごとの項目数・下位なし・上位なし・網羅率・リンク切れ・要確認）と「一覧」シート（関係、区分、文書、ID、表示列）。関係を省略すると全関係をまとめて出力する。,tracetool/services/export.py,F-71
+PRC-22,処理,出力: 差分,区分（列追加・列削除・列名変更・列の型変更・追加・削除・変更）、ID、列名、変更前、変更後。,tracetool/services/export.py,F-72
+PRC-23,処理,出力の形式,"Excel は openpyxl で作成する。CSV は UTF-8 BOM 付き（Excel で文字化けしないため）。複数シートの CSV は先頭に「シート」列を付けて 1 ファイルにまとめる。
+ファイルはメモリ上で作り、ブラウザにダウンロードさせる（サーバ側には保存しない）。",tracetool/services/export.py;tracetool/app.py,F-70;F-71;F-72;C-01
+PRC-24,処理,出力の安全対策,"Excel のセルに書けない制御文字は取り除く。
+数式として解釈されうる値: Excel は = で始まる文字列も文字列型のセルとして書く（値は変えない）。CSV は = + - @ タブ・CR で始まる文字列の先頭に ' を付ける（値が変わることを操作マニュアルに記載する）。",tracetool/services/export.py,F-70;F-71;F-72
+API-01,API,共通,"すべて JSON。パスの接頭辞は /api。本文は型付きモデル（Pydantic）で受け取る。
+エラーは {""error"": {""code"": ""..."", ""message"": ""日本語のメッセージ""}} で返す。項目 ID はパスではなくクエリで渡す（ID に / などが含まれ得るため）。",tracetool/app.py,C-02;N-05
+API-02,API,GET /documents,文書一覧（最新版、版の数、上位なし・下位なし・要確認・リンク切れの件数を含む）。,tracetool/app.py,F-60
+API-03,API,POST /documents,文書を作成する（名前、説明、カラム定義）。カラム定義は空でもよい。,tracetool/app.py;tracetool/services/documents.py,F-01;F-02
+API-04,API,GET /documents/{id},文書の詳細（作業中のカラム定義、最新版 ID、この文書を参照している文書名を含む）。,tracetool/app.py,F-02
+API-05,API,PUT /documents/{id},名前・説明・カラム定義を更新する。schema・description を省略した場合は既存の値を維持する。,tracetool/app.py;tracetool/services/documents.py,F-01;F-02;F-05
+API-06,API,DELETE /documents/{id},文書を削除する（DAT-19）。,tracetool/app.py;tracetool/services/documents.py,F-01
+API-07,API,GET /documents/{id}/versions,版の一覧（新しい順）。,tracetool/app.py;tracetool/services/versions.py,F-30
+API-08,API,GET /documents/{id}/find?q=,リンク追加用に、最新版から ID・表示列で項目を検索する（最大 30 件）。,tracetool/app.py;tracetool/services/items.py,F-43
+API-09,API,DELETE /versions/{vid},版を削除する（PRC-11）。,tracetool/app.py,F-32
+API-10,API,GET /versions/{vid}/items,"項目一覧。クエリ: q（全文）、f.<列キー>（列ごとの部分一致。f.__invalid で警告セルのある行のみ）、sort（列キー / upper_count / lower_count）、desc、trace（no_upper / no_lower / suspect / broken）、page、size。
+応答に、最新版か、上位・下位の関係があるかを含める。",tracetool/app.py;tracetool/services/items.py,F-61;F-63;F-64
+API-11,API,GET /versions/{vid}/item?id=,項目の詳細と、関係ごとの上位・下位のリンク（状態付き。無効化した自動リンクも含む）。,tracetool/app.py;tracetool/services/items.py,F-62
+API-12,API,GET /diff?from={vid}&to={vid},2 つの版の差分（PRC-18、PRC-19）。,tracetool/app.py;tracetool/services/diff.py,F-31
+API-13,API,GET /relations,トレース関係の一覧（網羅率・リンク数・要確認・リンク切れの要約付き）。,tracetool/app.py,F-40;F-51
+API-14,API,POST /relations,関係を作成する（PRC-12。循環ならエラー）。,tracetool/app.py,F-40
+API-15,API,DELETE /relations/{rid},関係を削除する。,tracetool/app.py,F-40
+API-16,API,POST /links,手動リンクを追加する（関係、上位 ID、下位 ID）。両方の項目が最新版に存在する必要がある。,tracetool/app.py;tracetool/services/links.py,F-43
+API-17,API,DELETE /links/{lid},リンクを削除する（DAT-22 の規則）。,tracetool/app.py;tracetool/services/links.py,F-43
+API-18,API,POST /links/{lid}/restore,無効化した自動リンクを元に戻す。,tracetool/app.py;tracetool/services/links.py,F-43
+API-19,API,POST /links/ack,リンクを確認済みにする（ID の配列で一括指定）。,tracetool/app.py;tracetool/services/links.py,F-45
+API-20,API,GET /trace/{rid},関係ごとの網羅率と、下位なし・上位なし・リンク切れ・要確認・全リンクの一覧（表示列付き）。,tracetool/app.py;tracetool/services/trace.py,F-50;F-51;F-52
+API-21,API,取り込み API,POST /imports、PUT /imports/{sid}/settings、PUT /imports/{sid}/validate、POST /imports/{sid}/commit、DELETE /imports/{sid}（PRC-02）。,tracetool/app.py;tracetool/importer.py,F-15;F-16;F-17
+API-22,API,GET /export/matrix?relation={rid}&format=xlsx|csv,トレースマトリクスを出力する（PRC-20）。,tracetool/app.py,F-70
+API-23,API,GET /export/untraced?relation={rid}&format=xlsx|csv,未トレース一覧を出力する（PRC-21。relation 省略で全関係）。,tracetool/app.py,F-71
+API-24,API,GET /export/diff?from={vid}&to={vid}&format=xlsx|csv,差分を出力する（PRC-22）。,tracetool/app.py,F-72
+UI-01,画面,共通,ハッシュ形式のルーティング（#/documents/3/items など）で、1 枚の HTML 内で画面を切り替える。エラーは画面右下にトースト表示する。文言はすべて日本語。,tracetool/static/app.js;tracetool/static/router.js;tracetool/static/api.js,N-05
+UI-02,画面,S1 ダッシュボード,"文書の一覧（最新版、項目数、上位なし・下位なし・要確認・リンク切れの件数。件数をクリックすると S4 を絞り込んで開く）。
+トレース関係を「上位 → 下位」の一覧で表示し、各関係の網羅率を表示する。関係の追加・削除と、全関係の未トレース一覧の出力もこの画面で行う。",tracetool/static/views/dashboard.js,F-60;F-51;F-40;F-71
+UI-03,画面,S2 文書の設定,"名前・説明。カラム定義の編集（列の追加・削除・並べ替え、型、リスト形式と区切り文字、enum の選択肢、bool の真偽文字列、参照先文書、表示列）。文書の削除。
+詳細設定の内容が増えても、列名の入力欄は幅を固定して縮めない。",tracetool/static/views/docsettings.js;tracetool/static/views/schema-editor.js,F-01;F-02;F-03;F-04
+UI-04,画面,S3 取り込み,"3 ステップのウィザード: 1. ファイル選択 → 2. 読み込み設定（文字コード、ヘッダ行、シート。プレビューの行をクリックしてヘッダ行を指定できる）→ 3. 列の対応付けと検証（カラム定義の編集、未対応のファイルの列の追加、エラー・警告・プレビュー、版のラベル）。
+定義を変更したら再検証するまで確定できない。確定せずに画面を離れたらセッションを破棄する。",tracetool/static/views/import.js,F-11;F-12;F-13;F-15;F-16;F-17
+UI-05,画面,S4 項目一覧,"版の選択（既定は最新版。過去の版は読み取り専用の表示）、全文検索、列ごとのフィルタ、ソート、ページング（100 件ずつ）。
+「上位」「下位」のリンク数と「状態」の列を付け、状態で絞り込める（関係が無い方向は - と表示）。警告セルは強調表示する。
+検索の応答が前後しても、最後に出した要求の結果だけを表示する。",tracetool/static/views/items.js,F-61;F-63;F-64;F-16
+UI-06,画面,S5 項目詳細,"S4 の右側のパネル。全列の値。関係ごとに上位・下位のリンク一覧（相手の ID と表示列、状態、生成元）。
+リンク先をクリックすると相手文書の S4 に遷移してその項目を選択する。リンクの追加（相手文書の項目を ID・表示列で検索して選ぶ）・削除（自動リンクは無効化）・元に戻す・確認済み。",tracetool/static/views/items.js,F-62;F-43;F-45
+UI-07,画面,S6 版の一覧・差分,"版の一覧（ラベル、日時、元ファイル名、行数）、版の閲覧・削除（確認ダイアログ）。
+2 つの版を選んで差分を表示する（列の変更、項目の追加・削除・変更。変更はセル単位で前後を表示）。差分の出力は表示中の差分の版を使う。",tracetool/static/views/versions.js,F-30;F-31;F-32;F-72
+UI-08,画面,S8 トレース状況,関係を選択し、網羅率、下位なし、上位なし、リンク切れ、要確認、全リンクの各タブを表示する。要確認は選択して一括で確認済みにできる。マトリクス・未トレース一覧の出力。,tracetool/static/views/trace.js,F-50;F-51;F-52;F-70;F-71;G-02
+ERR-01,エラー処理,ログの方針,ログはデータフォルダの logs/ に出力する（1MB × 4 世代）。ログには項目の値を書かない。書くのは操作の種類、文書 ID、件数、エラーの種類まで。,tracetool/__main__.py;tracetool/app.py,C-01
+ERR-02,エラー処理,予期しない例外,例外メッセージ（値を含みうる）は書かず、例外の型と発生場所（ファイル名・行番号・関数名）だけを記録する。応答にも例外の型だけを返す。,tracetool/app.py,C-01
+ERR-03,エラー処理,入力の型の誤り,リクエスト本文の型の誤り（422）は、項目名だけを返し、入力値は返さない。,tracetool/app.py,C-01
+SEC-01,セキュリティ,他の PC からの接続,127.0.0.1 にのみバインドする（STA-02）。,tracetool/__main__.py,N-03;C-01
+SEC-02,セキュリティ,DNS リバインディング,Host ヘッダが 127.0.0.1 / localhost 以外の要求を 400 で拒否する。悪意あるサイトが自分のドメインを 127.0.0.1 に向け、同一オリジンとして API を読むのを防ぐ。,tracetool/app.py,C-01
+SEC-03,セキュリティ,CSRF,GET 以外の要求で、Origin がこのツール（ホスト名とポート）以外、または Sec-Fetch-Site: cross-site の場合は 403 で拒否する。,tracetool/app.py,C-01
+SEC-04,セキュリティ,XSS,画面では値を {{ }} で表示し、v-html / innerHTML を使わない。,tracetool/static/views/,C-01
+SEC-05,セキュリティ,外部通信なし,画面のライブラリはすべて同梱し、CDN や外部 URL を参照しない。OpenAPI・ドキュメント画面は無効にする。,tracetool/static/index.html;tracetool/app.py,C-03;N-03
+TST-01,テスト,単体テスト,pytest で、値の正規化、ハッシュ、各形式の読み込み（結合セル・CP932・セル内改行・TSV・日付）、検証を確認する。,tests/test_colschema.py;tests/test_readers.py,F-02;F-03;F-10;F-11;F-14
+TST-02,テスト,API テスト,FastAPI の TestClient で、取り込み → 版の追加 → リンクの引き継ぎ・要確認 → 差分 → 出力 の一連の流れを確認する。,tests/test_flow.py,F-17;F-42;F-44;F-45;F-50
+TST-03,テスト,回帰テスト,取り込みの順序と要確認、フラグの組み合わせ、複数の関係、文書の削除と ID、DB の移行、出力の内容（制御文字・数式）、Host / Origin の検査、ログに値が書かれないこと、読み込みの細かな条件を確認する。,tests/test_regressions.py,F-43;F-45;C-01
+TST-04,テスト,テストデータ,テストデータはテスト内で生成する。実際の仕様書はリポジトリに置かない。,tests/conftest.py,C-01
+TST-05,テスト,性能の確認,"上位・下位とも 10,000 行・15 列、リンク 2 万本のデータで、取り込み・一覧・検索・トレース評価・出力の時間を測る。
+実測: 取り込み 約 4 秒、一覧・検索・評価 0.01〜0.3 秒、マトリクス出力 約 1.7 秒。",,N-01;N-02;C-06

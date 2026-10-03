@@ -16,3 +16,5 @@ data/
 *.csv
 *.tsv
 !tests/fixtures/**
+# このプロジェクト自身の要件定義書・詳細設計書（このツールで読み込める CSV）は管理する
+!docs/*.csv

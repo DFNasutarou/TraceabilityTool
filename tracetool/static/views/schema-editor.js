@@ -10,16 +10,25 @@ function newKey() {
   return "c" + Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-// 区切り文字はスペース区切りで入力する。改行・タブ・空白はそれぞれ \n \t \s と書く
+// 区切り文字: 改行とタブはチェックボックスで指定する。
+// それ以外は入力欄にスペース区切りで書く（空白そのものを区切りにする場合は \s と書く）。
+// 入力欄に \n や \t と書いても改行・タブとして扱う（以前の形式との互換のため）
 const ESCAPES = { "\\n": "\n", "\\t": "\t", "\\s": " " };
 
-function delimToText(delims) {
-  const rev = Object.fromEntries(Object.entries(ESCAPES).map(([k, v]) => [v, k]));
-  return (delims || []).map((d) => rev[d] ?? d).join(" ");
+function delimsToEdit(delims) {
+  const list = delims || [];
+  return {
+    delimNewline: list.includes("\n"),
+    delimTab: list.includes("\t"),
+    delimText: list.filter((d) => d !== "\n" && d !== "\t").map((d) => (d === " " ? "\\s" : d)).join(" "),
+  };
 }
 
-function textToDelims(text) {
-  return text.split(/\s+/).filter(Boolean).map((d) => ESCAPES[d] ?? d);
+function editToDelims(c) {
+  const out = c.delimText.split(/\s+/).filter(Boolean).map((d) => ESCAPES[d] ?? d);
+  if (c.delimNewline) out.push("\n");
+  if (c.delimTab) out.push("\t");
+  return [...new Set(out)];
 }
 
 function lines(text) {
@@ -29,7 +38,7 @@ function lines(text) {
 export function newColumn(name = "", sourceHeader = null, type = "string") {
   return {
     key: newKey(), name, source_header: sourceHeader, type,
-    listEnabled: false, delimText: ";", enumText: "",
+    listEnabled: false, delimText: ";", delimNewline: false, delimTab: false, enumText: "",
     trueText: DEFAULT_TRUE.join("\n"), falseText: DEFAULT_FALSE.join("\n"),
     ref_document_id: "",
   };
@@ -44,7 +53,7 @@ export function toEdit(schema) {
       source_header: c.source_header,
       type: c.type,
       listEnabled: !!c.list,
-      delimText: c.list ? delimToText(c.list.delimiters) : ";",
+      ...(c.list ? delimsToEdit(c.list.delimiters) : { delimText: ";", delimNewline: false, delimTab: false }),
       enumText: (c.enum_values || []).join("\n"),
       trueText: (c.bool_values?.true || DEFAULT_TRUE).join("\n"),
       falseText: (c.bool_values?.false || DEFAULT_FALSE).join("\n"),
@@ -61,7 +70,7 @@ export function fromEdit(model) {
       name: c.name.trim(),
       source_header: c.source_header || null,
       type: c.type,
-      list: c.listEnabled && c.type !== "id" ? { delimiters: textToDelims(c.delimText) } : null,
+      list: c.listEnabled && c.type !== "id" ? { delimiters: editToDelims(c) } : null,
       enum_values: c.type === "enum" ? lines(c.enumText) : null,
       bool_values: c.type === "bool" ? { true: lines(c.trueText), false: lines(c.falseText) } : null,
       ref_document_id: c.type === "string" && c.ref_document_id ? Number(c.ref_document_id) : null,
@@ -119,8 +128,8 @@ export default {
         <thead>
           <tr>
             <th style="width:56px">順序</th>
-            <th>列名</th>
-            <th v-if="headers">ファイルの列</th>
+            <th class="col-name">列名</th>
+            <th v-if="headers" class="col-src">ファイルの列</th>
             <th style="width:110px">型</th>
             <th>詳細設定</th>
             <th style="width:60px"></th>
@@ -148,9 +157,13 @@ export default {
               <label v-if="col.type !== 'id'" class="check">
                 <input type="checkbox" v-model="col.listEnabled" @change="changed"> リスト形式
               </label>
-              <label v-if="col.listEnabled && col.type !== 'id'" class="inline">
-                区切り文字 <input class="short" v-model="col.delimText" @input="changed" title="スペース区切りで複数指定。改行は \\n、タブは \\t、空白は \\s">
-              </label>
+              <span v-if="col.listEnabled && col.type !== 'id'" class="delims">
+                <label class="inline">
+                  区切り文字 <input class="short" v-model="col.delimText" @input="changed" placeholder="例: ; ," title="スペース区切りで複数指定できます。空白そのものを区切りにする場合は \\s と書きます">
+                </label>
+                <label class="check"><input type="checkbox" v-model="col.delimNewline" @change="changed"> 改行</label>
+                <label class="check"><input type="checkbox" v-model="col.delimTab" @change="changed"> タブ</label>
+              </span>
               <label v-if="col.type === 'string'" class="inline">
                 参照先
                 <select v-model="col.ref_document_id" @change="changed">

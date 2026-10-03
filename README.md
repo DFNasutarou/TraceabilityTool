@@ -13,12 +13,13 @@
 | `packaging/build.py` | 配布フォルダを作るスクリプト | × |
 | `packaging/entry.py` | 実行ファイルのエントリポイント | ○（実行ファイルに組み込まれる） |
 | `packaging/user_files/` | 利用者向けの資料（操作マニュアル）。中身がそのまま配布フォルダにコピーされる | ○ |
-| `docs/` | 要件定義書・詳細設計書 | × |
+| `docs/` | 要件定義書・詳細設計書（このツールで読み込める CSV） | × |
 | `tests/` | テスト | × |
 | `.github/workflows/build.yml` | Windows 版・Ubuntu 版の配布フォルダを作る GitHub Actions | × |
 
-- 要件定義書: [docs/01_requirements.md](docs/01_requirements.md)
-- 詳細設計書: [docs/02_design.md](docs/02_design.md)
+- 要件定義書: [docs/要件定義書.csv](docs/要件定義書.csv)
+- 詳細設計書: [docs/詳細設計書.csv](docs/詳細設計書.csv)（「上位要件」列で要件 ID を参照）
+- 読み込み方法・ID の付け方: [docs/README.md](docs/README.md)
 - 操作マニュアル（利用者向け）: [packaging/user_files/操作マニュアル.md](packaging/user_files/操作マニュアル.md)
 
 ## 配布フォルダ
