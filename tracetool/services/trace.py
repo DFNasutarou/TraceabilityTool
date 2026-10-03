@@ -30,6 +30,18 @@ def link_status(link: dict, upper_hashes: dict[str, str], lower_hashes: dict[str
 
 
 def _evaluate(conn: sqlite3.Connection, rel: dict) -> dict:
+    """関係 1 つ分の評価。書き込みが起きるまで結果をキャッシュする（書き換えないこと）。"""
+    cache = getattr(conn, "cache", None)
+    key = ("rel", rel["id"])
+    if cache is not None and key in cache["eval"]:
+        return cache["eval"][key]
+    result = _evaluate_uncached(conn, rel)
+    if cache is not None:
+        cache["eval"][key] = result
+    return result
+
+
+def _evaluate_uncached(conn: sqlite3.Connection, rel: dict) -> dict:
     upper_hashes = ver_svc.latest_hashes(conn, rel["upper_doc_id"])
     lower_hashes = ver_svc.latest_hashes(conn, rel["lower_doc_id"])
     links = []
@@ -61,11 +73,7 @@ def _evaluate(conn: sqlite3.Connection, rel: dict) -> dict:
 
 def _side(conn: sqlite3.Connection, doc_id: int, linked: set[str]) -> dict:
     v = ver_svc.latest_version(conn, doc_id)
-    order = (
-        [r["item_id"] for r in conn.execute("SELECT item_id FROM items WHERE version_id = ? ORDER BY row_no", (v["id"],))]
-        if v
-        else []
-    )
+    order = [i["item_id"] for i in ver_svc.load_items(conn, v["id"])] if v else []
     untraced = [i for i in order if i not in linked]
     total = len(order)
     return {
@@ -116,7 +124,12 @@ def item_trace_summary(conn: sqlite3.Connection, doc_id: int) -> dict[str, dict]
 
     no_upper: 上位文書があるのに、いずれかの関係で上位へのリンクが無い
     no_lower: 下位文書があるのに、いずれかの関係で下位へのリンクが無い
+    結果はキャッシュを共有するので書き換えないこと。
     """
+    cache = getattr(conn, "cache", None)
+    key = ("doc", doc_id)
+    if cache is not None and key in cache["eval"]:
+        return cache["eval"][key]
     hashes = ver_svc.latest_hashes(conn, doc_id)
     summary = {
         i: {"upper_count": 0, "lower_count": 0, "no_upper": False, "no_lower": False, "suspect": 0, "broken": 0}
@@ -142,6 +155,8 @@ def item_trace_summary(conn: sqlite3.Connection, doc_id: int) -> dict[str, dict]
             s[count_key] += 1
             if link["status"] == STATUS_SUSPECT:
                 s["suspect"] += 1
+    if cache is not None:
+        cache["eval"][key] = summary
     return summary
 
 

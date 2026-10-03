@@ -1,63 +1,78 @@
-# トレーサビリティツール
+# トレーサビリティツール（開発用リポジトリ）
 
 表形式の仕様書・設計書（CSV / TSV / Excel）を取り込み、文書間の項目を相互に追跡するためのローカルツールです。
 データはすべて PC 内で処理し、外部への通信は行いません。
 
+このリポジトリはツールの**開発用**です。利用者に渡すのは、ビルドで作る**配布フォルダ**だけです（後述）。
+
+## リポジトリの構成
+
+| パス | 内容 | 配布フォルダに入るか |
+|---|---|---|
+| `tracetool/` | ツール本体（Python パッケージと画面） | ○（実行ファイルに組み込まれる） |
+| `packaging/build.py` | 配布フォルダを作るスクリプト | × |
+| `packaging/entry.py` | 実行ファイルのエントリポイント | ○（実行ファイルに組み込まれる） |
+| `packaging/user_files/` | 利用者向けの資料（操作マニュアル）。中身がそのまま配布フォルダにコピーされる | ○ |
+| `docs/` | 要件定義書・詳細設計書 | × |
+| `tests/` | テスト | × |
+| `.github/workflows/build.yml` | Windows 版・Ubuntu 版の配布フォルダを作る GitHub Actions | × |
+
 - 要件定義書: [docs/01_requirements.md](docs/01_requirements.md)
 - 詳細設計書: [docs/02_design.md](docs/02_design.md)
+- 操作マニュアル（利用者向け）: [packaging/user_files/操作マニュアル.md](packaging/user_files/操作マニュアル.md)
 
-## 必要なもの
+## 配布フォルダ
 
-- Python 3.11 以上
+```
+TraceabilityTool-windows/            TraceabilityTool-linux/
+  TraceabilityTool.exe                 TraceabilityTool
+  _internal/   … 実行に必要なファイル     _internal/
+  操作マニュアル.md                       操作マニュアル.md
+```
 
-## セットアップ
+- フォルダをコピーするだけで使えます。利用者の PC に Python は不要です。
+- PyInstaller は実行した OS 向けの実行ファイルしか作れないため、**Windows 版は Windows で、Ubuntu 版は Ubuntu でビルド**します。
+- Ubuntu 版は、ビルドした Ubuntu と同じかそれより新しい Ubuntu で動きます（GitHub Actions では Ubuntu 22.04 でビルドしています）。
+
+### ビルド手順
+
+開発環境を用意したうえで（次節）、ビルドしたい OS で次を実行します。
+
+```bash
+python packaging/build.py
+```
+
+`dist/TraceabilityTool-windows/` または `dist/TraceabilityTool-linux/` ができます。`build/` と `dist/` は git の管理外です。
+
+GitHub Actions の「build」ワークフローを手動で実行する（または `v*` タグを push する）と、両 OS 版が成果物（Artifacts）として作られます。
+
+## 開発環境
+
+Python 3.11 以上が必要です。
 
 ```bash
 python -m venv .venv
-.venv\Scripts\python -m pip install -e .
-```
-
-開発（テスト）用の依存も入れる場合:
-
-```bash
 .venv\Scripts\python -m pip install -e ".[dev]"
 ```
 
-## 起動
+（Ubuntu では `.venv/bin/python`）
+
+### 開発中の起動
 
 ```bash
-.venv\Scripts\python -m tracetool
+.venv\Scripts\python -m tracetool --data-dir ./data
 ```
 
-- ブラウザで `http://127.0.0.1:8765/` が開きます（`127.0.0.1` でのみ待ち受けるため、他の PC からは接続できません）。
-- 終了はコンソールで `Ctrl+C`。
+- ブラウザで `http://127.0.0.1:8765/` が開きます。`127.0.0.1` でのみ待ち受け、Host / Origin ヘッダも検査します（DNS リバインディング・CSRF 対策）。
+- `--data-dir` を省略すると `%USERPROFILE%\TraceabilityTool\data`（Ubuntu は `~/TraceabilityTool/data`）を使います。`data/` は git の管理外です。
 
-| オプション | 説明 | 既定値 |
-|---|---|---|
-| `--data-dir PATH` | データフォルダ | `%USERPROFILE%\TraceabilityTool\data` |
-| `--port N` | ポート番号 | `8765` |
-| `--no-browser` | ブラウザを自動で開かない | |
-
-データフォルダには `tracetool.db`（SQLite）と `logs/` が作られます。バックアップはフォルダごとコピーしてください（ツールを終了してからコピーすること）。
-ログには項目の値を書き込みません。
-
-## 使い方の流れ
-
-1. **文書を追加**: 文書一覧の「文書を追加」から、文書名とカラム定義（任意）を登録する。
-2. **取り込み**: ファイルを選択 → 文字コード・ヘッダ行・シートを指定 → 列の対応付けと型を確認して「検証」→「取り込む」。
-   取り込むたびに新しい版になります。
-3. **トレース関係**: 文書一覧の下部で「上位文書 → 下位文書」を登録する。
-4. **リンク**:
-   - 参照 ID 列（カラム定義で「参照先」を指定した文字列列）から自動で作られます。
-   - 項目一覧で項目をクリックすると右側に詳細が表示され、リンクの追加・削除・確認済みができます。
-5. **トレース状況**: 網羅率、上位なし・下位なし、リンク切れ、要確認を確認し、Excel / CSV に出力する。
-6. **版・差分**: 2 つの版を比較し、追加・削除・変更された項目を確認・出力する。
-
-## テスト
+### テスト
 
 ```bash
 .venv\Scripts\python -m pytest
 ```
+
+テストデータはテスト内で生成します。実際の仕様書をリポジトリに置かないでください（`.gitignore` で `*.xlsx` `*.csv` などを除外しています）。
 
 ## 同梱しているサードパーティ製ファイル
 

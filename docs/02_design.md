@@ -1,6 +1,6 @@
 # トレーサビリティツール 詳細設計書
 
-- 版: 0.2（実装に合わせて API・画面の記述を更新）
+- 版: 0.3（レビュー指摘の反映、配布方式の追加）
 - 作成日: 2026-10-03
 - 対応する要件定義書: `01_requirements.md` 版 0.2
 
@@ -15,6 +15,7 @@
 | 文字コード判定 | 自前（UTF-8 BOM → UTF-8 → CP932 の順に試す） | 依存を増やさない |
 | 画面 | Vue 3（`vue.global.prod.js` をリポジトリに同梱）＋素の ES Modules | ビルド不要・CDN 不使用 |
 | テスト | pytest | |
+| 配布 | PyInstaller（onedir） | 利用者の PC に Python 不要。フォルダのコピーだけで使える |
 
 ### 1.1 起動
 
@@ -24,7 +25,15 @@ python -m tracetool [--data-dir PATH] [--port 8765] [--no-browser]
 
 - `127.0.0.1` にのみバインドする（N-03）。
 - 起動後に既定ブラウザで `http://127.0.0.1:<port>/` を開く（N-06）。
-- データフォルダの既定値は `%USERPROFILE%\TraceabilityTool\data`。リポジトリ配下には置かない（機密データを誤ってコミットしないため）。
+- データフォルダの既定値は `%USERPROFILE%\TraceabilityTool\data`（Ubuntu は `~/TraceabilityTool/data`）。リポジトリ配下にも配布フォルダ内にも置かない（機密データを誤ってコミットしないため。また配布フォルダを差し替えて更新してもデータが残るように）。
+- 起動前にポートが空いているか確認し、使用中なら理由を表示して終了する（exe をダブルクリックした場合は Enter を押すまで待ち、メッセージを読めるようにする）。
+
+### 1.2 配布
+
+- 開発用リポジトリと配布フォルダを分ける。配布フォルダには、実行に必要なものと利用者向けの操作マニュアルだけを入れる（設計書・テスト・ソースは入れない）。
+- `python packaging/build.py` で、実行した OS 向けの配布フォルダ `dist/TraceabilityTool-<windows|linux>/` を作る。PyInstaller はクロスビルドできないため、Windows 版は Windows、Ubuntu 版は Ubuntu でビルドする。GitHub Actions（`.github/workflows/build.yml`）でも両 OS 版を作れる。
+- 配布フォルダの構成: 実行ファイル（`TraceabilityTool.exe` / `TraceabilityTool`）、`_internal/`（Python 実行環境・ライブラリ・画面ファイル）、`packaging/user_files/` の中身（操作マニュアル）。
+- `build/` と `dist/` は git の管理外。
 
 ## 2. ディレクトリ構成
 
@@ -44,7 +53,6 @@ tracetool/
     trace.py           未トレース・リンク切れ・網羅率の計算
     diff.py            版の差分計算
     export.py          Excel / CSV 出力
-  api/                 FastAPI ルータ（services を呼ぶだけの薄い層）
   static/
     index.html
     app.js             ルーティング、共通処理
@@ -52,10 +60,16 @@ tracetool/
     views/*.js         画面コンポーネント
     style.css
     vendor/vue.global.prod.js
+packaging/
+  build.py             配布フォルダを作る（PyInstaller）
+  entry.py             実行ファイルのエントリポイント
+  user_files/          配布フォルダにそのままコピーする利用者向け資料（操作マニュアル）
 tests/
 docs/
 pyproject.toml
 ```
+
+API は `app.py` に直接定義している（ルータへの分割はしていない）。
 
 ## 3. データモデル
 
@@ -137,7 +151,7 @@ content_hash = sha256( JSON.dumps( {列キー: 正規化後の値  ※値が nul
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);   -- schema_version など
 
 CREATE TABLE documents (
-  id            INTEGER PRIMARY KEY,
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
   name          TEXT NOT NULL UNIQUE,
   description   TEXT NOT NULL DEFAULT '',
   schema_json   TEXT NOT NULL,            -- 作業中のカラム定義（次回の取り込みで使う）
@@ -146,7 +160,7 @@ CREATE TABLE documents (
 );
 
 CREATE TABLE versions (
-  id              INTEGER PRIMARY KEY,
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
   document_id     INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   version_no      INTEGER NOT NULL,       -- 文書内で 1 から連番。削除しても欠番のまま再利用しない
   label           TEXT NOT NULL DEFAULT '',
@@ -169,7 +183,7 @@ CREATE TABLE items (
 );
 
 CREATE TABLE relations (
-  id            INTEGER PRIMARY KEY,
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
   upper_doc_id  INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   lower_doc_id  INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   UNIQUE (upper_doc_id, lower_doc_id),
@@ -177,7 +191,7 @@ CREATE TABLE relations (
 );
 
 CREATE TABLE links (
-  id              INTEGER PRIMARY KEY,
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
   relation_id     INTEGER NOT NULL REFERENCES relations(id) ON DELETE CASCADE,
   upper_item_id   TEXT NOT NULL,
   lower_item_id   TEXT NOT NULL,
@@ -193,7 +207,12 @@ CREATE TABLE links (
 ```
 
 - 版の「最新版」は `version_no` が最大のもの。
-- 項目一覧の検索・ソート・絞り込みは、版単位で項目をメモリに読み込んで Python 側で行う（10,000 行程度なら十分に速い）。読み込み結果は版 ID をキーにキャッシュする（版は不変なので無効化は削除時のみ）。
+- ID 列は `AUTOINCREMENT` にし、削除した文書・版・関係・リンクの ID を再利用しない（再利用すると、残っている参照が無関係の新しい行を指すため）。スキーマ版 1 の DB は、起動時に表を作り直して版 2 に移行する。
+- 文書を削除するときは、他の文書の作業中カラム定義にある、その文書への `ref_document_id` を外す。
+- 項目一覧の検索・ソート・絞り込みは、版単位で項目をメモリに読み込んで Python 側で行う（10,000 行程度なら十分に速い）。
+- キャッシュ（接続オブジェクトに保持）:
+  - 版 ID → 項目一覧・ハッシュ表。版は不変なので、版・文書の削除時とロールバック時のみ破棄する。
+  - トレース評価の結果（関係ごと・文書ごと）。書き込みのトランザクションのたびに破棄する。
 
 ### 3.5 リンクの有効判定
 
@@ -269,6 +288,10 @@ CREATE TABLE links (
 2. D の各項目について、参照 ID 列の値（リスト形式なら各要素）から（上位 ID, 下位 ID）の組の集合 S を作る。
 3. 既存のリンクのうち、該当フラグが 1 で S に含まれない行はフラグを 0 にする（すべてのフラグが 0 になり `manual=0` なら行を削除）。
 4. S に含まれる組は、行が無ければ作成し、該当フラグを 1 にする。新しく作成した行の確認ハッシュは現在のハッシュとする。既存行の確認ハッシュと `auto_disabled` は変えない。
+5. 確認ハッシュが空（NULL）のリンクのうち、D 側の項目が D の最新版に存在するものに、現在のハッシュを入れる。
+   - リンクを作った時点で相手の項目がまだ無かった場合（相手文書が未取り込み、リンク切れのまま作成・確認した場合）、確認ハッシュは空になる。項目が現れた時点のハッシュを基準にしないと、取り込みの順番だけでリンクが要確認になってしまうため。
+
+この処理は、取り込みの確定時、版の削除時、関係の作成時に行う。
 
 トレース関係を削除した場合、その関係のリンクはすべて削除される（ON DELETE CASCADE）。
 
@@ -307,6 +330,11 @@ CREATE TABLE links (
 
 「表示列」は文書ごとに 1 列選べる（カラム定義の任意の string 列。既定は ID 列の次の列）。カラム定義 JSON に `"display_column": "<列キー>"` として持つ。
 Excel は openpyxl で作成し、ブラウザにダウンロードさせる（サーバ側には保存しない）。CSV は UTF-8 BOM 付き（Excel で文字化けしないため）。
+
+- Excel のセルに書けない制御文字は取り除く。
+- 数式として解釈されうる値（数式インジェクション）:
+  - Excel: `=` で始まる文字列も、文字列型のセルとして書く（値は変えない）。
+  - CSV: `=` `+` `-` `@` タブ・CR で始まる文字列の先頭に `'` を付ける（値が変わることを操作マニュアルに記載する）。
 
 ## 5. API 一覧
 
@@ -361,11 +389,23 @@ Excel は openpyxl で作成し、ブラウザにダウンロードさせる（�
 
 - API のエラーは `{ "error": { "code": "...", "message": "日本語のメッセージ" } }` で返し、画面にトースト表示する。
 - ログはデータフォルダの `logs/` に出力する。**ログには項目の値を書かない**（機密情報をログに残さないため）。書くのは操作の種類、文書 ID、件数、エラーの種類まで。
+  - 予期しない例外は、例外メッセージ（値を含みうる）を書かず、例外の型と発生場所（ファイル名・行番号・関数名）だけを記録する。応答にも例外の型だけを返す。
+  - リクエスト本文の型の誤り（422）は、項目名だけを返し、入力値は返さない。
+
+## 7.1 ローカル Web サーバとしての対策
+
+| 脅威 | 対策 |
+|---|---|
+| 他の PC からの接続 | `127.0.0.1` にのみバインドする |
+| DNS リバインディング（悪意あるサイトが自分のドメインを 127.0.0.1 に向け、同一オリジンとして API を読む） | `Host` ヘッダが `127.0.0.1` / `localhost` 以外の要求を 400 で拒否する |
+| CSRF（他サイトから書き込み API を呼ぶ） | GET 以外の要求で、`Origin` がこのツール（ホスト名とポート）以外、または `Sec-Fetch-Site: cross-site` の場合は 403 で拒否する |
+| XSS | 画面では値を `{{ }}` で表示し、`v-html` / `innerHTML` を使わない |
 
 ## 8. テスト方針
 
 - 単体テスト（pytest）: 値の正規化、ハッシュ、各形式の読み込み（結合セル・CP932・セル内改行）、列の対応付け、検証、自動リンクの再生成、手動リンクの削除規則、トレース評価、差分。
 - API テスト: FastAPI の TestClient で、取り込み → 版の追加 → リンクの引き継ぎ・要確認 → 出力 の一連の流れを確認する。
+- 回帰テスト（`tests/test_regressions.py`）: 取り込みの順序と要確認、フラグの組み合わせ、複数の関係、文書の削除と ID、DB の移行、出力の内容（制御文字・数式）、Host / Origin の検査、ログに値が書かれないこと、読み込みの細かな条件。
 - テストデータはテスト内で生成する（実際の仕様書は使わない）。
 
 ## 9. 実装順序

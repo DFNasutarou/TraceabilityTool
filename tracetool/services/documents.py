@@ -75,9 +75,16 @@ def create_document(conn: sqlite3.Connection, name: str, description: str, schem
     return cur.lastrowid
 
 
-def update_document(conn: sqlite3.Connection, doc_id: int, name: str, description: str, schema: dict) -> None:
-    get_document(conn, doc_id)
+def update_document(
+    conn: sqlite3.Connection, doc_id: int, name: str, description: str | None, schema: dict | None
+) -> None:
+    """schema / description が None なら既存の値を維持する。"""
+    current = get_document(conn, doc_id)
     name = _check_name(conn, name, doc_id)
+    if description is None:
+        description = current["description"]
+    if schema is None:
+        schema = current["schema"]
     schema = colschema.normalize_schema(schema)
     if colschema.columns(schema):
         schema = check_schema(conn, doc_id, schema)
@@ -87,6 +94,31 @@ def update_document(conn: sqlite3.Connection, doc_id: int, name: str, descriptio
     )
 
 
+def referencing_documents(conn: sqlite3.Connection, doc_id: int) -> list[str]:
+    """作業中のカラム定義で、この文書を参照 ID 列の参照先にしている文書の名前。"""
+    names = []
+    for d in list_documents(conn):
+        if any(c.get("ref_document_id") == doc_id for c in colschema.columns(d["schema"])):
+            names.append(d["name"])
+    return names
+
+
 def delete_document(conn: sqlite3.Connection, doc_id: int) -> None:
     get_document(conn, doc_id)
+    # 他の文書の作業中定義から、この文書への参照を外す（参照先の無い参照 ID 列を残さない）
+    for d in list_documents(conn):
+        if d["id"] == doc_id:
+            continue
+        cols = colschema.columns(d["schema"])
+        if not any(c.get("ref_document_id") == doc_id for c in cols):
+            continue
+        for c in cols:
+            if c.get("ref_document_id") == doc_id:
+                c["ref_document_id"] = None
+        conn.execute(
+            "UPDATE documents SET schema_json = ? WHERE id = ?", (json.dumps(d["schema"], ensure_ascii=False), d["id"])
+        )
     conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+    conn.execute("DELETE FROM meta WHERE key = ?", (f"max_version_no:{doc_id}",))
+    if hasattr(conn, "clear_cache"):
+        conn.clear_cache()

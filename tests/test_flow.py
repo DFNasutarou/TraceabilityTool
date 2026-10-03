@@ -34,7 +34,11 @@ def do_import(client, doc_id, filename, data, schema=None, header_row=1, sheets=
     settings = ok(
         client.put(f"/api/imports/{sid}/settings", json={"header_row": header_row, "sheets": sheets or start["sheets"][:1]})
     )
-    schema = settings["schema"] if schema is None else schema
+    if schema is None:
+        schema = settings["schema"]
+    else:
+        # テストで直接渡すカラム定義は、ファイルのヘッダ名 = 列名として対応付ける
+        schema = {**schema, "columns": [{"source_header": c["name"], **c} for c in schema["columns"]]}
     v = ok(client.put(f"/api/imports/{sid}/validate", json={"schema": schema}))
     if v["error_count"]:
         return v

@@ -58,6 +58,7 @@ export default {
         fd.append("document_id", props.docId);
         fd.append("file", f);
         start.value = await api.post("/api/imports", fd);
+        model.value = toEdit(null); // 別のファイルを選び直したら、定義の案を作り直す
         encoding.value = "";
         headerRow.value = 1;
         sheets.value = start.value.sheets.slice(0, 1);
@@ -87,7 +88,23 @@ export default {
 
     async function toStep3() {
       if (!(await applySettings())) return;
-      model.value = toEdit(settings.value.schema);
+      if (model.value.columns.length) {
+        // ステップ 3 で編集した定義は保ったまま、ファイルの列との対応付けだけを更新する
+        const headers = settings.value.headers;
+        const used = new Set();
+        for (const c of model.value.columns) {
+          if (c.source_header && headers.includes(c.source_header) && !used.has(c.source_header)) used.add(c.source_header);
+          else c.source_header = null;
+        }
+        for (const c of model.value.columns) {
+          if (!c.source_header && headers.includes(c.name) && !used.has(c.name)) {
+            c.source_header = c.name;
+            used.add(c.name);
+          }
+        }
+      } else {
+        model.value = toEdit(settings.value.schema);
+      }
       validation.value = null;
       dirty.value = true;
       step.value = 3;

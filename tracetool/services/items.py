@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 from .. import colschema
+from . import relations as rel_svc
 from . import trace as trace_svc
 from . import versions as ver_svc
 
@@ -36,11 +37,10 @@ def query_items(
     version = ver_svc.get_version(conn, version_id)
     latest = ver_svc.latest_version(conn, version["document_id"])
     is_latest = latest is not None and latest["id"] == version_id
-    items = ver_svc.load_items(conn, version_id)
-
     summary = trace_svc.item_trace_summary(conn, version["document_id"]) if is_latest else {}
-    for item in items:
-        item["trace"] = summary.get(item["item_id"])
+    # キャッシュ共有の項目を書き換えないよう、複製してからトレース情報を付ける
+    items = [dict(i, trace=summary.get(i["item_id"])) for i in ver_svc.load_items(conn, version_id)]
+    rels = rel_svc.relations_of(conn, version["document_id"])
 
     q = (q or "").strip().casefold()
     if q:
@@ -80,6 +80,8 @@ def query_items(
         "version": {k: version[k] for k in ("id", "document_id", "version_no", "label", "imported_at")},
         "schema": version["schema"],
         "is_latest": is_latest,
+        "has_upper": any(r["lower_doc_id"] == version["document_id"] for r in rels),
+        "has_lower": any(r["upper_doc_id"] == version["document_id"] for r in rels),
         "total": total,
         "page": page,
         "size": size,
@@ -91,7 +93,6 @@ def item_detail(conn: sqlite3.Connection, version_id: int, item_id: str) -> dict
     """項目の値と、関係ごとの上位・下位リンク（最新版のときのみ）。"""
     from . import documents as doc_svc
     from . import links as link_svc
-    from . import relations as rel_svc
 
     version = ver_svc.get_version(conn, version_id)
     item = ver_svc.get_item(conn, version_id, item_id)

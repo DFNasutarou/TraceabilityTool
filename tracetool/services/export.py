@@ -140,6 +140,26 @@ def _safe_sheet_title(title: str, used: set[str]) -> str:
     return title
 
 
+def _xlsx_safe(value):
+    """Excel のセルに書けない制御文字を取り除く（書くと openpyxl が例外を投げる）。"""
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+
+    if isinstance(value, str):
+        return ILLEGAL_CHARACTERS_RE.sub("", value)
+    return value
+
+
+# CSV を Excel で開いたときに数式として実行されうる先頭文字（CSV インジェクション対策）
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value):
+    """数式として解釈されうる文字列の先頭に ' を付ける（CSV では値の前に ' が付いた形で出力される）。"""
+    if isinstance(value, str) and value.startswith(_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
 def to_xlsx(sheets: list[Sheet]) -> bytes:
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill
@@ -153,9 +173,12 @@ def to_xlsx(sheets: list[Sheet]) -> bytes:
         for cell in ws[1]:
             cell.font = Font(bold=True)
             cell.fill = PatternFill("solid", fgColor="DDE6F0")
-        for row in s.rows:
-            # 先頭が = の値を数式として解釈させない
-            ws.append([("'" + v) if isinstance(v, str) and v.startswith("=") else v for v in row])
+        for r, row in enumerate(s.rows, start=2):
+            ws.append([_xlsx_safe(v) for v in row])
+            # 先頭が = の値は openpyxl が数式として書き込むため、文字列として書かせる（値は変えない）
+            for c, v in enumerate(row, start=1):
+                if isinstance(v, str) and v.startswith("="):
+                    ws.cell(row=r, column=c).data_type = "s"
         ws.freeze_panes = "A2"
         for i, _ in enumerate(s.header, start=1):
             ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = 20
@@ -170,11 +193,11 @@ def to_csv(sheets: list[Sheet]) -> bytes:
     w = csv.writer(buf, lineterminator="\r\n")
     if len(sheets) == 1:
         w.writerow(sheets[0].header)
-        w.writerows(sheets[0].rows)
+        w.writerows([[_csv_safe(v) for v in r] for r in sheets[0].rows])
     else:
         for s in sheets:
             w.writerow(["シート"] + s.header)
-            w.writerows([[s.title] + r for r in s.rows])
+            w.writerows([[_csv_safe(v) for v in [s.title] + r] for r in s.rows])
             w.writerow([])
     return ("﻿" + buf.getvalue()).encode("utf-8")
 

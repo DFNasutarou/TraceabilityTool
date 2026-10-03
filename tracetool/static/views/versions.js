@@ -91,8 +91,9 @@ export default {
         </label>
         <button class="btn primary" @click="runDiff">比較</button>
         <template v-if="diff">
-          <button class="btn" @click="download('/api/export/diff', {from: fromId, to: toId, format: 'xlsx'})">Excel 出力</button>
-          <button class="btn" @click="download('/api/export/diff', {from: fromId, to: toId, format: 'csv'})">CSV 出力</button>
+          <!-- 出力は、セレクトの現在値ではなく表示中の差分の版を使う -->
+          <button class="btn" @click="download('/api/export/diff', {from: diff.from.id, to: diff.to.id, format: 'xlsx'})">Excel 出力</button>
+          <button class="btn" @click="download('/api/export/diff', {from: diff.from.id, to: diff.to.id, format: 'csv'})">CSV 出力</button>
         </template>
       </div>
       <p v-else class="empty">差分を見るには版が 2 つ以上必要です。</p>
@@ -122,7 +123,7 @@ export default {
             <template v-for="it in diff.changed" :key="it.item_id">
               <tr v-for="(c, j) in it.cells" :key="c.key">
                 <td v-if="j === 0" :rowspan="it.cells.length" class="idcell">
-                  <a :href="href('/documents/' + docId + '/items', {version: toId, item: it.item_id})">{{ it.item_id }}</a>
+                  <a :href="href('/documents/' + docId + '/items', {version: diff.to.id, item: it.item_id})">{{ it.item_id }}</a>
                 </td>
                 <td class="nowrap">{{ c.name }}</td>
                 <td class="pre del">{{ fmtValue(c.old) }}</td>

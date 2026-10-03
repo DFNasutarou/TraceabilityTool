@@ -42,8 +42,38 @@ def _delete_if_unused(conn: sqlite3.Connection, link_id: int) -> None:
     )
 
 
+def fill_missing_acks(conn: sqlite3.Connection, doc_id: int) -> None:
+    """確認ハッシュが空のリンクに、この文書の最新版のハッシュを入れる。
+
+    リンクを作った時点で相手の項目がまだ無かった場合（相手文書が未取り込み、リンク切れ）、
+    確認ハッシュは空になる。項目が現れた時点のハッシュを「確認済み」の基準にしないと、
+    取り込み順だけでリンクが要確認になってしまう。
+    """
+    hashes = ver_svc.latest_hashes(conn, doc_id)
+    if not hashes:
+        return
+    for rel in rel_svc.relations_of(conn, doc_id):
+        side = "upper" if rel["upper_doc_id"] == doc_id else "lower"
+        rows = conn.execute(
+            f"SELECT id, {side}_item_id AS item FROM links WHERE relation_id = ? AND {side}_hash_ack IS NULL",
+            (rel["id"],),
+        ).fetchall()
+        for r in rows:
+            h = hashes.get(r["item"])
+            if h is not None:
+                conn.execute(f"UPDATE links SET {side}_hash_ack = ? WHERE id = ?", (h, r["id"]))
+
+
 def regenerate_auto_links(conn: sqlite3.Connection, doc_id: int) -> None:
-    """文書の最新版の参照 ID 列から、その文書が生成元の自動リンクを作り直す。"""
+    """文書の最新版の参照 ID 列から、その文書が生成元の自動リンクを作り直す。
+
+    あわせて、確認ハッシュが空のリンクを埋める（fill_missing_acks）。
+    """
+    _regenerate(conn, doc_id)
+    fill_missing_acks(conn, doc_id)
+
+
+def _regenerate(conn: sqlite3.Connection, doc_id: int) -> None:
     latest = ver_svc.latest_version(conn, doc_id)
     items = ver_svc.load_items(conn, latest["id"]) if latest else []
     schema = latest["schema"] if latest else colschema.empty_schema()

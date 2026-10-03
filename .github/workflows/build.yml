@@ -1,0 +1,48 @@
+# 配布フォルダ（Windows 版・Ubuntu 版）を作る。
+# PyInstaller は実行した OS 向けの実行ファイルしか作れないため、OS ごとにビルドする。
+# 手動実行（Actions 画面の「Run workflow」）または v* タグの push で動く。
+name: build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            tag: windows
+          # 古い Ubuntu でビルドすると、それ以降の Ubuntu で動く（glibc の互換性のため）
+          - os: ubuntu-22.04
+            tag: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 依存関係のインストール
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: テスト
+        run: python -m pytest -q
+      - name: 配布フォルダの作成
+        run: python packaging/build.py
+      # 実行権限を保ったまま渡すため、Linux 版は tar.gz にまとめる
+      - name: アーカイブ（Linux）
+        if: matrix.tag == 'linux'
+        run: tar -czf TraceabilityTool-linux.tar.gz -C dist TraceabilityTool-linux
+      - uses: actions/upload-artifact@v4
+        if: matrix.tag == 'linux'
+        with:
+          name: TraceabilityTool-linux
+          path: TraceabilityTool-linux.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: matrix.tag == 'windows'
+        with:
+          name: TraceabilityTool-windows
+          path: dist/TraceabilityTool-windows

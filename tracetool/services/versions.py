@@ -44,13 +44,19 @@ def latest_version(conn: sqlite3.Connection, doc_id: int) -> dict | None:
 
 
 def load_items(conn: sqlite3.Connection, version_id: int) -> list[dict]:
-    """版の全項目を取り込み順で返す。"""
+    """版の全項目を取り込み順で返す。
+
+    結果はキャッシュを共有するので、呼び出し側で書き換えないこと（必要なら複製する）。
+    """
+    cache = getattr(conn, "cache", None)
+    if cache is not None and version_id in cache["items"]:
+        return cache["items"][version_id]
     rows = conn.execute(
         "SELECT item_id, row_no, data_json, invalid_json, content_hash FROM items "
         "WHERE version_id = ? ORDER BY row_no",
         (version_id,),
     ).fetchall()
-    return [
+    items = [
         {
             "item_id": r["item_id"],
             "row_no": r["row_no"],
@@ -60,6 +66,9 @@ def load_items(conn: sqlite3.Connection, version_id: int) -> list[dict]:
         }
         for r in rows
     ]
+    if cache is not None:
+        cache["items"][version_id] = items
+    return items
 
 
 def get_item(conn: sqlite3.Connection, version_id: int, item_id: str) -> dict:
@@ -79,17 +88,30 @@ def get_item(conn: sqlite3.Connection, version_id: int, item_id: str) -> dict:
     }
 
 
+def version_hashes(conn: sqlite3.Connection, version_id: int) -> dict[str, str]:
+    """版の {項目ID: ハッシュ}。キャッシュを共有するので書き換えないこと。"""
+    cache = getattr(conn, "cache", None)
+    if cache is not None and version_id in cache["hashes"]:
+        return cache["hashes"][version_id]
+    rows = conn.execute("SELECT item_id, content_hash FROM items WHERE version_id = ?", (version_id,)).fetchall()
+    hashes = {r["item_id"]: r["content_hash"] for r in rows}
+    if cache is not None:
+        cache["hashes"][version_id] = hashes
+    return hashes
+
+
 def latest_hashes(conn: sqlite3.Connection, doc_id: int) -> dict[str, str]:
     """文書の最新版の {項目ID: ハッシュ}。版が無ければ空。"""
     v = latest_version(conn, doc_id)
     if v is None:
         return {}
-    rows = conn.execute("SELECT item_id, content_hash FROM items WHERE version_id = ?", (v["id"],)).fetchall()
-    return {r["item_id"]: r["content_hash"] for r in rows}
+    return version_hashes(conn, v["id"])
 
 
 def delete_version(conn: sqlite3.Connection, version_id: int) -> int:
     """版を削除し、文書 ID を返す。自動リンクの再生成は呼び出し側で行う。"""
     v = get_version(conn, version_id)
     conn.execute("DELETE FROM versions WHERE id = ?", (version_id,))
+    if hasattr(conn, "clear_cache"):
+        conn.clear_cache()
     return v["document_id"]

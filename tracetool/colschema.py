@@ -124,7 +124,7 @@ def validate_schema(schema: dict) -> list[str]:
 def split_list(text: str, delimiters: list[str]) -> list[str]:
     parts = [text]
     for d in delimiters:
-        d = "\n" if d in ("\\n", "\n") else d
+        d = {"\\n": "\n", "\\t": "\t"}.get(d, d)
         next_parts: list[str] = []
         for p in parts:
             next_parts.extend(p.split(d))
@@ -143,7 +143,8 @@ def _convert_scalar(col: dict, text: str) -> tuple[Any, bool]:
     if t == "int":
         s = unicodedata.normalize("NFKC", text).replace(",", "").strip()
         if _INT_RE.match(s):
-            return int(float(s)) if "." in s else int(s), False
+            # float を経由すると 2^53 を超える値で精度が落ちるため、小数部（すべて 0）を切り落とす
+            return int(s.split(".")[0]), False
         return text, True
     if t == "bool":
         bv = col.get("bool_values") or {}

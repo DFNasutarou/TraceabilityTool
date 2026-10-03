@@ -10,12 +10,16 @@ function newKey() {
   return "c" + Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+// 区切り文字はスペース区切りで入力する。改行・タブ・空白はそれぞれ \n \t \s と書く
+const ESCAPES = { "\\n": "\n", "\\t": "\t", "\\s": " " };
+
 function delimToText(delims) {
-  return (delims || []).map((d) => (d === "\n" ? "\\n" : d)).join(" ");
+  const rev = Object.fromEntries(Object.entries(ESCAPES).map(([k, v]) => [v, k]));
+  return (delims || []).map((d) => rev[d] ?? d).join(" ");
 }
 
 function textToDelims(text) {
-  return text.split(/\s+/).filter(Boolean).map((d) => (d === "\\n" ? "\n" : d));
+  return text.split(/\s+/).filter(Boolean).map((d) => ESCAPES[d] ?? d);
 }
 
 function lines(text) {
@@ -145,7 +149,7 @@ export default {
                 <input type="checkbox" v-model="col.listEnabled" @change="changed"> リスト形式
               </label>
               <label v-if="col.listEnabled && col.type !== 'id'" class="inline">
-                区切り文字 <input class="short" v-model="col.delimText" @input="changed" title="スペース区切りで複数指定。改行は \\n">
+                区切り文字 <input class="short" v-model="col.delimText" @input="changed" title="スペース区切りで複数指定。改行は \\n、タブは \\t、空白は \\s">
               </label>
               <label v-if="col.type === 'string'" class="inline">
                 参照先

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
+import traceback
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
-from fastapi import Body, FastAPI, File, Form, Request, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import importer
 from .db import Database
@@ -34,22 +37,103 @@ def _from_param(request: Request) -> int:
         raise AppError("比較元の版（from）を指定してください") from None
 
 
-def create_app(db: Database) -> FastAPI:
+# --- リクエスト本文 ------------------------------------------------------------
+
+
+class _Body(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+
+class DocumentIn(_Body):
+    name: str
+    description: str | None = None
+    schema_: dict | None = Field(default=None, alias="schema")
+
+
+class RelationIn(_Body):
+    upper_doc_id: int
+    lower_doc_id: int
+
+
+class LinkIn(_Body):
+    relation_id: int
+    upper_item_id: str
+    lower_item_id: str
+
+
+class AckIn(_Body):
+    ids: list[int]
+
+
+class ImportSettingsIn(_Body):
+    encoding: str | None = None
+    header_row: int = Field(default=1, ge=1)
+    sheets: list[str] = []
+
+
+class ImportSchemaIn(_Body):
+    schema_: dict = Field(alias="schema")
+    label: str = ""
+
+
+# --- エラー・ログ ----------------------------------------------------------------
+
+
+def _error(message: str, code: str, status: int) -> JSONResponse:
+    return JSONResponse({"error": {"code": code, "message": message}}, status_code=status)
+
+
+def _log_unexpected(request: Request, exc: BaseException) -> None:
+    """予期しない例外を記録する。
+
+    例外メッセージやローカル変数には項目の値が含まれうるため書かない。
+    書くのは例外の型と、発生場所（ファイル名・行番号・関数名）だけ。
+    """
+    frames = traceback.extract_tb(exc.__traceback__)[-8:]
+    where = " <- ".join(f"{Path(f.filename).name}:{f.lineno}:{f.name}" for f in reversed(frames))
+    log.error("unexpected error: %s %s %s at %s", request.method, request.url.path, type(exc).__name__, where)
+
+
+def create_app(db: Database, port: int | None = None, extra_hosts: tuple[str, ...] = ()) -> FastAPI:
+    """port: 待ち受けポート（Origin の検査に使う）。extra_hosts: テスト用に許可する Host 名。"""
     app = FastAPI(title="トレーサビリティツール", docs_url=None, redoc_url=None, openapi_url=None)
     sessions = importer.SessionStore()
+    sessions.start_reaper()
+    allowed_hosts = {"127.0.0.1", "localhost", *extra_hosts}
+
+    def _host_ok(hostname: str | None) -> bool:
+        return (hostname or "").lower() in allowed_hosts
+
+    @app.middleware("http")
+    async def guard(request: Request, call_next):
+        # DNS リバインディング対策: このツール以外の名前でアクセスされたら応答しない
+        host = request.headers.get("host", "")
+        if not _host_ok(urlsplit("//" + host).hostname):
+            return _error("許可されていないホスト名でのアクセスです", "forbidden_host", 400)
+        # CSRF 対策: 状態を変える要求は、このツールの画面から送られたものだけ受け付ける
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            if request.headers.get("sec-fetch-site") == "cross-site":
+                return _error("他のサイトからの操作は受け付けません", "forbidden_origin", 403)
+            origin = request.headers.get("origin")
+            if origin is not None:
+                o = urlsplit(origin)
+                if not _host_ok(o.hostname) or (port is not None and o.port != port):
+                    return _error("他のサイトからの操作は受け付けません", "forbidden_origin", 403)
+        try:
+            return await call_next(request)
+        except Exception as exc:  # noqa: BLE001 - 予期しない例外はすべてここで 500 にする
+            _log_unexpected(request, exc)
+            return _error(f"予期しないエラーが発生しました（{type(exc).__name__}）", "internal", 500)
 
     @app.exception_handler(AppError)
     async def app_error_handler(request: Request, exc: AppError):
-        return JSONResponse({"error": {"code": exc.code, "message": exc.message}}, status_code=exc.status)
+        return _error(exc.message, exc.code, exc.status)
 
-    @app.exception_handler(Exception)
-    async def unexpected_error_handler(request: Request, exc: Exception):
-        # ログには値を書かず、例外の種類と場所だけ残す
-        log.exception("unexpected error: %s %s", request.method, request.url.path)
-        return JSONResponse(
-            {"error": {"code": "internal", "message": f"予期しないエラーが発生しました（{type(exc).__name__}）"}},
-            status_code=500,
-        )
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(request: Request, exc: RequestValidationError):
+        # 入力値そのものは返さず、項目名だけ伝える
+        fields = sorted({".".join(str(p) for p in e.get("loc", ()) if p != "body") for e in exc.errors()})
+        return _error("入力が不正です: " + ", ".join(f or "(本文)" for f in fields), "invalid_request", 422)
 
     # --- 文書 ---------------------------------------------------------------
 
@@ -69,9 +153,9 @@ def create_app(db: Database) -> FastAPI:
             return docs
 
     @app.post("/api/documents")
-    def create_document(body: dict = Body(...)):
+    def create_document(body: DocumentIn):
         with db.tx() as conn:
-            doc_id = doc_svc.create_document(conn, body.get("name", ""), body.get("description", ""), body.get("schema"))
+            doc_id = doc_svc.create_document(conn, body.name, body.description or "", body.schema_)
         log.info("document created: id=%s", doc_id)
         return {"id": doc_id}
 
@@ -81,12 +165,13 @@ def create_app(db: Database) -> FastAPI:
             d = doc_svc.get_document(conn, doc_id)
             v = ver_svc.latest_version(conn, doc_id)
             d["latest_version_id"] = v["id"] if v else None
+            d["referenced_by"] = doc_svc.referencing_documents(conn, doc_id)
             return d
 
     @app.put("/api/documents/{doc_id}")
-    def update_document(doc_id: int, body: dict = Body(...)):
+    def update_document(doc_id: int, body: DocumentIn):
         with db.tx() as conn:
-            doc_svc.update_document(conn, doc_id, body.get("name", ""), body.get("description", ""), body.get("schema") or {})
+            doc_svc.update_document(conn, doc_id, body.name, body.description, body.schema_)
         return {"ok": True}
 
     @app.delete("/api/documents/{doc_id}")
@@ -158,12 +243,12 @@ def create_app(db: Database) -> FastAPI:
             return out
 
     @app.post("/api/relations")
-    def create_relation(body: dict = Body(...)):
+    def create_relation(body: RelationIn):
         with db.tx() as conn:
-            rid = rel_svc.create_relation(conn, int(body["upper_doc_id"]), int(body["lower_doc_id"]))
+            rid = rel_svc.create_relation(conn, body.upper_doc_id, body.lower_doc_id)
             # 既に取り込み済みの参照 ID 列があれば、関係の作成時点でリンクを作る
-            link_svc.regenerate_auto_links(conn, int(body["upper_doc_id"]))
-            link_svc.regenerate_auto_links(conn, int(body["lower_doc_id"]))
+            link_svc.regenerate_auto_links(conn, body.upper_doc_id)
+            link_svc.regenerate_auto_links(conn, body.lower_doc_id)
         return {"id": rid}
 
     @app.delete("/api/relations/{rid}")
@@ -183,11 +268,9 @@ def create_app(db: Database) -> FastAPI:
             return ev
 
     @app.post("/api/links")
-    def add_link(body: dict = Body(...)):
+    def add_link(body: LinkIn):
         with db.tx() as conn:
-            lid = link_svc.add_manual_link(
-                conn, int(body["relation_id"]), str(body["upper_item_id"]), str(body["lower_item_id"])
-            )
+            lid = link_svc.add_manual_link(conn, body.relation_id, body.upper_item_id, body.lower_item_id)
         return {"id": lid}
 
     @app.delete("/api/links/{lid}")
@@ -203,9 +286,9 @@ def create_app(db: Database) -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/links/ack")
-    def ack_links(body: dict = Body(...)):
+    def ack_links(body: AckIn):
         with db.tx() as conn:
-            n = link_svc.ack_links(conn, [int(i) for i in body.get("ids", [])])
+            n = link_svc.ack_links(conn, body.ids)
         return {"count": n}
 
     # --- 取り込み -----------------------------------------------------------
@@ -219,24 +302,22 @@ def create_app(db: Database) -> FastAPI:
         return result
 
     @app.put("/api/imports/{sid}/settings")
-    def import_settings(sid: str, body: dict = Body(...)):
+    def import_settings(sid: str, body: ImportSettingsIn):
         session = sessions.get(sid)
         with db.read() as conn:
-            return importer.apply_settings(
-                conn, session, body.get("encoding") or None, int(body.get("header_row", 1)), body.get("sheets") or []
-            )
+            return importer.apply_settings(conn, session, body.encoding or None, body.header_row, body.sheets)
 
     @app.put("/api/imports/{sid}/validate")
-    def import_validate(sid: str, body: dict = Body(...)):
+    def import_validate(sid: str, body: ImportSchemaIn):
         session = sessions.get(sid)
         with db.read() as conn:
-            return importer.validate(conn, session, body.get("schema") or {})
+            return importer.validate(conn, session, body.schema_)
 
     @app.post("/api/imports/{sid}/commit")
-    def import_commit(sid: str, body: dict = Body(...)):
+    def import_commit(sid: str, body: ImportSchemaIn):
         session = sessions.get(sid)
         with db.tx() as conn:
-            vid = importer.commit(conn, session, body.get("schema") or {}, body.get("label", ""))
+            vid = importer.commit(conn, session, body.schema_, body.label)
         sessions.remove(sid)
         log.info("import committed: document=%s version=%s", session.document_id, vid)
         return {"version_id": vid}

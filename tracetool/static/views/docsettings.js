@@ -13,6 +13,7 @@ export default {
     const model = ref(toEdit(null));
     const documents = ref([]);
     const hasVersions = ref(false);
+    const referencedBy = ref([]);
     const saving = ref(false);
 
     onMounted(async () => {
@@ -23,6 +24,7 @@ export default {
         description.value = d.description;
         model.value = toEdit(d.schema);
         hasVersions.value = !!d.latest_version_id;
+        referencedBy.value = d.referenced_by || [];
       }
     });
 
@@ -44,7 +46,10 @@ export default {
     }
 
     async function remove() {
-      if (!confirm(`文書「${name.value}」を削除します。\nすべての版、トレース関係、リンクも削除され、元に戻せません。よろしいですか？`)) return;
+      const refs = referencedBy.value.length
+        ? `\n次の文書の参照 ID 列は、参照先が「なし」に変わります: ${referencedBy.value.join("、")}`
+        : "";
+      if (!confirm(`文書「${name.value}」を削除します。\nすべての版、トレース関係、リンクも削除され、元に戻せません。${refs}\nよろしいですか？`)) return;
       await api.del(`/api/documents/${props.docId}`);
       toast("文書を削除しました");
       navigate("/");

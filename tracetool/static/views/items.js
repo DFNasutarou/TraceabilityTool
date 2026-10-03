@@ -34,16 +34,20 @@ export default {
     const isLatest = computed(() => result.value?.is_latest);
     const pages = computed(() => (result.value ? Math.max(1, Math.ceil(result.value.total / result.value.size)) : 1));
 
+    let loadSeq = 0;
     async function load() {
       if (!versionId.value) return;
+      const seq = ++loadSeq;
       loading.value = true;
       try {
         const params = { q: q.value, trace: trace.value, sort: sort.value, desc: desc.value ? "true" : "", page: page.value, size: 100 };
         for (const [k, v] of Object.entries(filters.value)) if (v) params["f." + k] = v;
         if (invalidOnly.value) params["f.__invalid"] = "1";
-        result.value = await api.get(`/api/versions/${versionId.value}/items`, params);
+        const res = await api.get(`/api/versions/${versionId.value}/items`, params);
+        // 後から出した要求の結果を、先に出した要求の遅れた応答で上書きしない
+        if (seq === loadSeq) result.value = res;
       } finally {
-        loading.value = false;
+        if (seq === loadSeq) loading.value = false;
       }
     }
 
@@ -86,6 +90,10 @@ export default {
       load();
     });
     watch(() => route.query.item, loadDetail);
+    // ブラウザの戻る・進むなどで query だけが変わった場合も、絞り込みを合わせる
+    watch(() => route.query.trace, (v) => {
+      if ((v || "") !== trace.value) trace.value = v || "";
+    });
     watch(() => route.query.version, () => {
       page.value = 1;
       load();
@@ -213,8 +221,8 @@ export default {
               <tr v-for="it in result.items" :key="it.item_id" @click="selectItem(it.item_id)" :class="{selected: route.query.item === it.item_id}">
                 <td v-for="c in columns" :key="c.key" :class="{invalid: it.invalid.includes(c.key), idcell: c.type === 'id'}">{{ fmtValue(it.data[c.key]) }}</td>
                 <template v-if="isLatest">
-                  <td class="num">{{ it.trace?.upper_count }}</td>
-                  <td class="num">{{ it.trace?.lower_count }}</td>
+                  <td class="num">{{ result.has_upper ? it.trace?.upper_count : '-' }}</td>
+                  <td class="num">{{ result.has_lower ? it.trace?.lower_count : '-' }}</td>
                   <td class="nowrap"><span v-for="[k, l] in traceBadges(it.trace)" :key="l" class="badge" :class="k">{{ l }}</span></td>
                 </template>
               </tr>

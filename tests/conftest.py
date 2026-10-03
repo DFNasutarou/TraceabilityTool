@@ -16,7 +16,7 @@ def db():
 
 @pytest.fixture
 def client(db):
-    return TestClient(create_app(db))
+    return TestClient(create_app(db, extra_hosts=("testserver",)))
 
 
 def make_xlsx(sheets: dict[str, list[list]], merges: dict[str, list[str]] | None = None) -> bytes:

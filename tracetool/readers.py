@@ -87,7 +87,21 @@ def read_sheet(wb, sheet_name: str) -> list[list[str]]:
     if sheet_name not in wb.sheetnames:
         raise AppError(f"シート「{sheet_name}」がありません")
     ws = wb[sheet_name]
-    grid = [[cell_to_str(v) for v in row] for row in ws.iter_rows(values_only=True)]
+    # 書式だけが下の方まで設定されたシートでは max_row が非常に大きくなるため、
+    # 値の入っているセルと結合範囲から、実際に読む範囲を決める
+    max_r = max_c = 0
+    for (r, c), cell in ws._cells.items():
+        if cell.value is not None and cell.value != "":
+            max_r, max_c = max(max_r, r), max(max_c, c)
+    for rng in ws.merged_cells.ranges:
+        if rng.min_row <= max_r:
+            max_c = max(max_c, rng.max_col)
+    if max_r == 0:
+        return []
+    grid = [
+        [cell_to_str(v) for v in row]
+        for row in ws.iter_rows(min_row=1, max_row=max_r, min_col=1, max_col=max_c, values_only=True)
+    ]
     # 結合セルは範囲内の全セルに左上の値を展開する
     for rng in ws.merged_cells.ranges:
         top = grid[rng.min_row - 1][rng.min_col - 1] if rng.min_row - 1 < len(grid) else ""
@@ -113,14 +127,17 @@ def build_table(grid: list[list[str]], header_row: int, sheet_name: str = "") ->
         headers.pop()
     if not headers:
         raise AppError(f"ヘッダ行 {header_row} 行目が空です")
-    seen: dict[str, int] = {}
-    for i, h in enumerate(headers):
-        name = h or f"列{i + 1}"
-        if name in seen:
-            seen[name] += 1
-            name = f"{name}({seen[name]})"
-        else:
-            seen[name] = 1
+    # 空のヘッダには名前を付け、重複する名前には (2), (3)… を付ける。
+    # 付け替えた名前が元から存在する名前と衝突しないよう、すべての名前を予約してから付ける
+    names = [h or f"列{i + 1}" for i, h in enumerate(headers)]
+    used: set[str] = set()
+    for i, name in enumerate(names):
+        if name in used:
+            n = 2
+            while f"{name}({n})" in used or f"{name}({n})" in names[i + 1 :]:
+                n += 1
+            name = f"{name}({n})"
+        used.add(name)
         headers[i] = name
     table = Table(headers=headers)
     width = len(headers)

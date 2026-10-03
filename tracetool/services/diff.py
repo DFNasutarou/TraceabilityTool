@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from .. import colschema
 from ..errors import AppError
 from . import versions as ver_svc
+
+
+def _same(a, b) -> bool:
+    """型まで含めて同じ値か。Python では 1 == True なので、ハッシュと同じく JSON 表現で比べる。"""
+    return json.dumps(a, sort_keys=True, ensure_ascii=False) == json.dumps(b, sort_keys=True, ensure_ascii=False)
 
 
 def diff_schema(old: dict, new: dict) -> list[dict]:
@@ -52,7 +58,7 @@ def diff_versions(conn: sqlite3.Connection, from_vid: int, to_vid: int) -> dict:
             cells = [
                 {"key": k, "name": names.get(k, k), "old": old["data"].get(k), "new": item["data"].get(k)}
                 for k in order
-                if old["data"].get(k) != item["data"].get(k)
+                if not _same(old["data"].get(k), item["data"].get(k))
             ]
             changed.append({"item_id": item["item_id"], "cells": cells})
         else:

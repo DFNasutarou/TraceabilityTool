@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import socket
+import sys
 import threading
 import webbrowser
 from logging.handlers import RotatingFileHandler
@@ -27,7 +29,35 @@ def setup_logging(data_dir: Path) -> None:
     logger.addHandler(handler)
 
 
+def port_available(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind((HOST, port))
+        except OSError:
+            return False
+    return True
+
+
+def fail(message: str) -> None:
+    """起動できない理由を表示して終了する。
+
+    配布版（exe）をダブルクリックで起動した場合、すぐ終了するとウィンドウが閉じて
+    メッセージが読めないため、Enter を押すまで待つ。
+    """
+    print(message, file=sys.stderr)
+    if getattr(sys, "frozen", False) and sys.platform.startswith("win"):
+        try:
+            input("Enter キーを押すと閉じます。")
+        except EOFError:
+            pass
+    raise SystemExit(1)
+
+
 def main() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        # コンソールの文字コードで表せない文字があっても落ちないようにする
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
     parser = argparse.ArgumentParser(prog="tracetool", description="トレーサビリティツール")
     parser.add_argument("--data-dir", type=Path, default=default_data_dir(), help="データフォルダ")
     parser.add_argument("--port", type=int, default=8765)
@@ -39,11 +69,17 @@ def main() -> None:
     from .app import create_app
     from .db import Database
 
+    if not port_available(args.port):
+        fail(
+            f"ポート {args.port} は他のソフト（または既に起動しているこのツール）が使用中です。\n"
+            f"既に起動している場合は http://{HOST}:{args.port}/ をブラウザで開いてください。\n"
+            "別のポートで起動する場合は --port 8800 のように指定してください。"
+        )
     data_dir: Path = args.data_dir.resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
     setup_logging(data_dir)
     db = Database(data_dir / "tracetool.db")
-    app = create_app(db)
+    app = create_app(db, port=args.port)
 
     url = f"http://{HOST}:{args.port}/"
     print(f"データフォルダ: {data_dir}")

@@ -40,6 +40,7 @@ class ImportSession:
     last_access: float = field(default_factory=time.monotonic)
     _workbook: Any = None
     _text: str | None = None
+    _grids: dict = field(default_factory=dict)  # 読み込んだ表のキャッシュ（シートや文字コードごと）
 
     def workbook(self):
         if self._workbook is None:
@@ -47,21 +48,39 @@ class ImportSession:
         return self._workbook
 
     def text(self, encoding: str | None) -> str:
-        if self._text is None or encoding != self.encoding:
+        if self._text is None or (encoding is not None and encoding != self.encoding):
             self._text, self.encoding = readers.decode_text(self.data, encoding)
         return self._text
 
     def raw_grid(self, sheet: str | None) -> list[list[str]]:
         if self.fmt == "xlsx":
-            return readers.read_sheet(self.workbook(), sheet or self.workbook().sheetnames[0])
-        delimiter = "\t" if self.fmt == "tsv" else ","
-        return readers.read_delimited(self.text(self.encoding), delimiter)
+            key = ("xlsx", sheet or self.workbook().sheetnames[0])
+            if key not in self._grids:
+                self._grids[key] = readers.read_sheet(self.workbook(), key[1])
+            return self._grids[key]
+        text = self.text(None)
+        key = ("text", self.encoding)
+        if key not in self._grids:
+            delimiter = "\t" if self.fmt == "tsv" else ","
+            self._grids[key] = readers.read_delimited(text, delimiter)
+        return self._grids[key]
 
 
 class SessionStore:
     def __init__(self) -> None:
         self._sessions: dict[str, ImportSession] = {}
         self._lock = threading.Lock()
+
+    def start_reaper(self, interval_sec: float = 60.0) -> None:
+        """一定間隔で期限切れのセッションを破棄する（画面を閉じた場合もメモリに残し続けない）。"""
+
+        def loop():
+            while True:
+                time.sleep(interval_sec)
+                with self._lock:
+                    self._expire()
+
+        threading.Thread(target=loop, name="import-session-reaper", daemon=True).start()
 
     def _expire(self) -> None:
         now = time.monotonic()
@@ -126,7 +145,11 @@ def apply_settings(
         session.table = readers.merge_tables(tables)
         preview = session.raw_grid(sheets[0])[:PREVIEW_ROWS]
     else:
-        session.text(encoding or None)
+        if encoding:
+            session.text(encoding)
+        else:
+            session._text = None  # 自動判定に戻す
+            session.text(None)
         grid = session.raw_grid(None)
         session.table = readers.build_table(grid, header_row)
         preview = grid[:PREVIEW_ROWS]
@@ -261,6 +284,8 @@ def build(conn: sqlite3.Connection, session: ImportSession, schema: dict) -> Bui
             if ref is not None and ref_ids.get(ref):
                 missing = [r for r in colschema.ref_values(value) if r not in ref_ids[ref]]
                 if missing:
+                    if col["key"] not in invalid:
+                        invalid.append(col["key"])
                     warnings.add(f"参照先に存在しない ID: {', '.join(missing)}", row=loc, column=col["name"])
         item_id = data.get(idc["key"])
         if item_id is None:
