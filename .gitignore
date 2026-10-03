@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# 機密データを誤ってコミットしないため、データ・取り込み元ファイルは置かない
+data/
+*.db
+*.db-wal
+*.db-shm
+*.xlsx
+*.xls
+*.csv
+*.tsv
+!tests/fixtures/**
