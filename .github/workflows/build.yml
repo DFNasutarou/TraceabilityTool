@@ -19,6 +19,9 @@ jobs:
           - os: ubuntu-22.04
             tag: linux
     runs-on: ${{ matrix.os }}
+    env:
+      # Windows ランナーの既定の文字コード（cp1252）では日本語を扱えないため、UTF-8 にする
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

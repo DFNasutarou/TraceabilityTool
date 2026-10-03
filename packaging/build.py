@@ -36,6 +36,12 @@ def platform_tag() -> str:
 def main() -> None:
     import PyInstaller.__main__
 
+    # 英語版 Windows（GitHub Actions など）のコンソールは cp1252 で日本語を表示できず、
+    # print で例外になるため、表示できない文字は置き換える
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+
     tag = platform_tag()
     work = ROOT / "build" / "pyinstaller" / tag
     staging = ROOT / "build" / "staging" / tag
