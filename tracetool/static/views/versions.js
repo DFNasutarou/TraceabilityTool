@@ -1,5 +1,6 @@
 import { api, download, fmtDate, fmtValue, toast } from "../api.js";
 import { route, href, replaceQuery } from "../router.js";
+import { diffSegments } from "../textdiff.js";
 
 const { ref, computed, onMounted } = Vue;
 
@@ -31,7 +32,10 @@ export default {
     async function runDiff() {
       if (!fromId.value || !toId.value) return;
       replaceQuery({ from: fromId.value, to: toId.value });
-      diff.value = await api.get("/api/diff", { from: fromId.value, to: toId.value });
+      const d = await api.get("/api/diff", { from: fromId.value, to: toId.value });
+      // 変わった部分を文字単位でハイライトするため、セルごとに差分を求めておく
+      for (const it of d.changed) for (const c of it.cells) c.segs = diffSegments(fmtValue(c.old), fmtValue(c.new));
+      diff.value = d;
       tab.value = diff.value.changed.length ? "changed" : diff.value.added.length ? "added" : "removed";
     }
 
@@ -126,8 +130,8 @@ export default {
                   <a :href="href('/documents/' + docId + '/items', {version: diff.to.id, item: it.item_id})">{{ it.item_id }}</a>
                 </td>
                 <td class="nowrap">{{ c.name }}</td>
-                <td class="pre del">{{ fmtValue(c.old) }}</td>
-                <td class="pre ins">{{ fmtValue(c.new) }}</td>
+                <td class="pre del"><span v-for="(s, k) in c.segs.old" :key="k" :class="{'hl-del': s.changed}">{{ s.text }}</span></td>
+                <td class="pre ins"><span v-for="(s, k) in c.segs.new" :key="k" :class="{'hl-ins': s.changed}">{{ s.text }}</span></td>
               </tr>
             </template>
           </tbody>

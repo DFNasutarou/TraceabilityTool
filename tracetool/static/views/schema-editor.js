@@ -1,7 +1,7 @@
 // カラム定義の編集部品。文書の設定画面と、取り込みの列対応付け画面で使う。
 // 編集用のモデル（toEdit で作る）を直接書き換える。保存時は fromEdit で API の形に戻す。
 
-import { TYPE_LABEL } from "../api.js";
+import { TYPE_LABEL, toast } from "../api.js";
 
 const DEFAULT_TRUE = ["○", "◯", "〇", "Yes", "Y", "TRUE", "1", "有", "あり"];
 const DEFAULT_FALSE = ["×", "✕", "✖", "No", "N", "FALSE", "0", "無", "なし"];
@@ -96,6 +96,44 @@ export default {
     function changed() {
       emit("change");
     }
+    // --- 列をまとめて追加（列名のテキストを貼り付け、区切り文字で分割する） ---
+    const bulkOpen = Vue.ref(false);
+    const bulkText = Vue.ref("");
+    const bulkDelim = Vue.ref("auto"); // auto / tab / comma / newline / custom
+    const bulkCustom = Vue.ref("");
+
+    function splitNames(text) {
+      let d = bulkDelim.value;
+      if (d === "auto") d = text.includes("\t") ? "tab" : /\r?\n/.test(text.trim()) ? "newline" : "comma";
+      const sep = { tab: /\t|\r?\n/, comma: /,|\r?\n/, newline: /\r?\n/ }[d] || bulkCustom.value;
+      if (!sep) return [];
+      return text.split(sep).map((t) => t.trim()).filter(Boolean);
+    }
+    const bulkPreview = Vue.computed(() => splitNames(bulkText.value));
+
+    function addBulk() {
+      const existing = new Set(props.model.columns.map((c) => c.name));
+      const added = [];
+      const skipped = [];
+      for (const name of bulkPreview.value) {
+        if (existing.has(name)) {
+          skipped.push(name);
+          continue;
+        }
+        existing.add(name);
+        // 取り込み画面では、同じ名前のファイルの列があれば対応付ける
+        const src = props.headers && props.headers.includes(name) ? name : null;
+        props.model.columns.push(newColumn(name, src));
+        added.push(name);
+      }
+      if (added.length) changed();
+      toast(`${added.length} 列を追加しました` + (skipped.length ? `（同じ名前の列があるため ${skipped.length} 列は追加しませんでした: ${skipped.join("、")}）` : ""));
+      if (added.length) {
+        bulkText.value = "";
+        bulkOpen.value = false;
+      }
+    }
+
     function add() {
       props.model.columns.push(newColumn("新しい列"));
       changed();
@@ -139,12 +177,11 @@ export default {
       try {
         const values = await props.loadValues(col);
         if (!values.length) {
-          alert("この列には値がありません。");
+          toast(`「${col.name}」列には値がありません`, "error");
           return;
         }
-        const msg = `この列で使われている ${values.length} 種類の値を選択肢にして、型を enum にします。\n\n` +
-          values.slice(0, 20).join("、") + (values.length > 20 ? " …" : "");
-        if (!confirm(msg)) return;
+        // 確認ダイアログは出さず、結果を通知する（選択肢は欄で確認・修正でき、型も戻せる）
+        toast(`「${col.name}」列を enum にしました（${values.length} 種類の値を選択肢にしました）`);
         col.type = "enum";
         col.ref_document_id = "";
         col.enumText = values.join("\n");
@@ -160,6 +197,7 @@ export default {
 
     return {
       types, add, remove, move, onTypeChange, otherDocs, headerUsed, missing, changed,
+      bulkOpen, bulkText, bulkDelim, bulkCustom, bulkPreview, addBulk,
       docName, hasRelation, createRelation, loadingValues, toEnum,
     };
   },
@@ -240,6 +278,7 @@ export default {
       </table>
       <div class="schema-footer">
         <button class="btn" @click="add">＋ 列を追加</button>
+        <button class="btn" @click="bulkOpen = !bulkOpen">＋ 列をまとめて追加</button>
         <label class="inline">
           表示列
           <select v-model="model.display_column" @change="changed" title="ID と一緒に表示する列（リンク一覧や出力で使う）">
@@ -248,6 +287,24 @@ export default {
           </select>
         </label>
         <span class="sub">英字の大文字・小文字、全角・半角は区別せずに bool を判定します。</span>
+      </div>
+      <div v-if="bulkOpen" class="bulk-add">
+        <p class="hint">列名を区切り文字で区切って貼り付けてください。Excel の見出しの行をコピーして貼り付けることもできます（タブ区切り）。追加した列は文字列型になります。</p>
+        <textarea rows="3" v-model="bulkText" placeholder="要件ID&#9;要件名&#9;優先度"></textarea>
+        <div class="inline-form">
+          <label>区切り文字
+            <select v-model="bulkDelim">
+              <option value="auto">自動判定</option>
+              <option value="tab">タブ</option>
+              <option value="comma">カンマ（,）</option>
+              <option value="newline">改行</option>
+              <option value="custom">その他</option>
+            </select>
+          </label>
+          <input v-if="bulkDelim === 'custom'" class="short" v-model="bulkCustom" placeholder="例: ;">
+          <span class="sub">{{ bulkPreview.length }} 列: {{ bulkPreview.slice(0, 10).join(' / ') }}{{ bulkPreview.length > 10 ? ' …' : '' }}</span>
+          <button class="btn primary" :disabled="!bulkPreview.length" @click="addBulk">追加する</button>
+        </div>
       </div>
     </div>
   `,

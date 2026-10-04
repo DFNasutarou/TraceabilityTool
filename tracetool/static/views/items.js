@@ -132,11 +132,9 @@ export default {
       await Promise.all([loadDetail(), load()]);
     }
     async function removeLink(link) {
-      const msg = link.auto
-        ? "このリンクは参照 ID 列から自動で作られています。無効化しますか？（再取り込みしても無効のままです）"
-        : "このリンクを削除しますか？";
-      if (!confirm(msg)) return;
+      // 確認ダイアログは出さない（自動リンクは「元に戻す」で戻せ、手動リンクは追加し直せるため）
       await api.del(`/api/links/${link.id}`);
+      toast(link.auto ? `${link.item_id} へのリンクを無効化しました（「元に戻す」で戻せます）` : `${link.item_id} へのリンクを削除しました`);
       await Promise.all([loadDetail(), load()]);
     }
     async function restoreLink(link) {
@@ -234,7 +232,11 @@ export default {
         <aside class="split-side" v-if="detail">
           <div class="side-head">
             <h2>{{ detail.item.item_id }}</h2>
-            <button class="icon-btn" title="閉じる" @click="selectItem('')">×</button>
+            <span class="actions">
+              <a v-if="detail.is_latest" class="btn small primary" :href="href('/documents/' + docId + '/side', {item: detail.item.item_id})"
+                 title="上位の項目 ｜ この項目 ｜ 下位の項目 を横に並べて、全列を見る">上位・下位と横並びで見る</a>
+              <button class="icon-btn" title="閉じる" @click="selectItem('')">×</button>
+            </span>
           </div>
           <table class="kv">
             <tr v-for="c in detail.schema.columns" :key="c.key">

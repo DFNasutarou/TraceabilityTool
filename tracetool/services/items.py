@@ -148,6 +148,79 @@ def item_detail(conn: sqlite3.Connection, version_id: int, item_id: str) -> dict
     }
 
 
+def item_neighborhood(conn: sqlite3.Connection, doc_id: int, item_id: str) -> dict:
+    """横並び表示用: 項目と、そのリンク先の上位項目・下位項目の全列（各文書の最新版）。
+
+    無効化したリンクは含めない。リンク先が最新版に無い（リンク切れ）場合は data を None にする。
+    prev / next は同じ文書の最新版での前後の項目 ID（項目を順にたどるため）。
+    """
+    from ..errors import AppError
+    from . import documents as doc_svc
+    from . import links as link_svc
+
+    doc = doc_svc.get_document(conn, doc_id)
+    latest = ver_svc.latest_version(conn, doc_id)
+    if latest is None:
+        raise AppError("まだ取り込まれていません")
+    item = ver_svc.get_item(conn, latest["id"], item_id)
+    order = [i["item_id"] for i in ver_svc.load_items(conn, latest["id"])]
+    pos = order.index(item_id)
+
+    sides: dict[str, list] = {"upper": [], "lower": []}
+    for rel in rel_svc.relations_of(conn, doc_id):
+        as_upper = rel["upper_doc_id"] == doc_id
+        other_id = rel["lower_doc_id"] if as_upper else rel["upper_doc_id"]
+        other_latest = ver_svc.latest_version(conn, other_id)
+        other_items = ver_svc.load_items(conn, other_latest["id"]) if other_latest else []
+        other_pos = {i["item_id"]: n for n, i in enumerate(other_items)}
+        upper_hashes = ver_svc.latest_hashes(conn, rel["upper_doc_id"])
+        lower_hashes = ver_svc.latest_hashes(conn, rel["lower_doc_id"])
+        mine, theirs = ("upper_item_id", "lower_item_id") if as_upper else ("lower_item_id", "upper_item_id")
+        rows = conn.execute(
+            f"SELECT * FROM links WHERE relation_id = ? AND {mine} = ?", (rel["id"], item_id)
+        ).fetchall()
+        entries = []
+        for r in rows:
+            link = dict(r)
+            if not link_svc.is_active(link):
+                continue
+            n = other_pos.get(link[theirs])
+            other = other_items[n] if n is not None else None
+            entries.append(
+                {
+                    "link_id": link["id"],
+                    "item_id": link[theirs],
+                    "data": other["data"] if other else None,
+                    "invalid": other["invalid"] if other else [],
+                    "status": trace_svc.link_status(link, upper_hashes, lower_hashes),
+                    "origin": trace_svc.link_origin(link),
+                    "_order": n if n is not None else len(other_items),
+                }
+            )
+        entries.sort(key=lambda e: (e["_order"], e["item_id"]))
+        for e in entries:
+            del e["_order"]
+        sides["lower" if as_upper else "upper"].append(
+            {
+                "relation_id": rel["id"],
+                "document": {"id": other_id, "name": doc_svc.get_document(conn, other_id)["name"]},
+                "schema": other_latest["schema"] if other_latest else colschema.empty_schema(),
+                "items": entries,
+            }
+        )
+    return {
+        "document": {"id": doc_id, "name": doc["name"]},
+        "schema": latest["schema"],
+        "item": item,
+        "prev": order[pos - 1] if pos > 0 else None,
+        "next": order[pos + 1] if pos + 1 < len(order) else None,
+        "position": pos + 1,
+        "total": len(order),
+        "upper": sides["upper"],
+        "lower": sides["lower"],
+    }
+
+
 def distinct_values(conn: sqlite3.Connection, doc_id: int, key: str) -> dict:
     """文書の最新版で、列に使われている値の一覧（enum の選択肢を作るため）。"""
     from ..errors import AppError

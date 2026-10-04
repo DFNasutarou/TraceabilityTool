@@ -15,6 +15,8 @@ STA-04,起動,データフォルダ,"既定値は %USERPROFILE%\TraceabilityTool
 フォルダには tracetool.db と logs/ だけを置くので、フォルダごとコピーすればバックアップになる。",tracetool/__main__.py,F-20;F-22;C-01
 STA-05,起動,ポートの確認,"起動前にポートが空いているか確認し、使用中なら理由を表示して終了する。exe をダブルクリックした場合は Enter を押すまで待ち、メッセージを読めるようにする。
 コンソールの文字コードで表せない文字は置き換えて表示する（英語版 Windows で落ちないように）。",tracetool/__main__.py,N-06;C-07
+STA-06,起動,画面ファイルの配信,"画面ファイル（static/）は /static/<版番号>/ の下で配信する。版番号は起動時に画面ファイルの内容から計算する（SHA-1 の先頭 12 桁）。index.html は毎回読み込ませ（no-store）、中の参照を版番号付きの URL に書き換える。
+ツールを差し替えると URL が変わるため、ブラウザがキャッシュした古い JS モジュールを使うことが無い。画面ファイルには Cache-Control: no-cache を付ける。",tracetool/app.py,N-08;C-08
 DST-01,配布,リポジトリと配布フォルダ,開発用リポジトリと配布フォルダを分ける。配布フォルダには、実行に必要なものと利用者向けの操作マニュアルだけを入れる（設計書・テスト・ソースは入れない）。,packaging/build.py,C-08
 DST-02,配布,ビルド,"python packaging/build.py で、実行した OS 向けの配布フォルダ dist/TraceabilityTool-<windows|linux>/ を作る。PyInstaller（onedir）を使い、利用者の PC に Python を不要にする。
 PyInstaller はクロスビルドできないため、Windows 版は Windows、Ubuntu 版は Ubuntu でビルドする。",packaging/build.py;packaging/entry.py,C-05;C-07;C-08
@@ -166,6 +168,7 @@ API-23,API,GET /export/untraced?relation={rid}&format=xlsx|csv,未トレース�
 API-24,API,GET /export/diff?from={vid}&to={vid}&format=xlsx|csv,差分を出力する（PRC-22）。,tracetool/app.py,F-72
 API-25,API,POST /imports/text,貼り付けたテキストから取り込みを始める（PRC-25）。本文: document_id、text、format（auto / csv / tsv）。,tracetool/app.py,F-19
 API-26,API,使われている値の取得,PUT /imports/{sid}/distinct（取り込み中）、GET /documents/{id}/distinct?key=（取り込み後）（PRC-26）。,tracetool/app.py,F-07
+API-27,API,GET /documents/{id}/neighborhood?id=,横並び表示用。項目（最新版）の全列と、関係ごとの上位・下位のリンク先項目の全列（無効化したリンクは除く。リンク切れは data なし）、各文書のカラム定義、同じ文書の前後の項目 ID と位置を返す。リンク先は相手文書での並び順に並べる。,tracetool/app.py;tracetool/services/items.py,F-65
 UI-01,画面,共通,ハッシュ形式のルーティング（#/documents/3/items など）で、1 枚の HTML 内で画面を切り替える。エラーは画面右下にトースト表示する。文言はすべて日本語。,tracetool/static/app.js;tracetool/static/router.js;tracetool/static/api.js,N-05
 UI-02,画面,S1 ダッシュボード,"文書の一覧（最新版、項目数、上位なし・下位なし・要確認・リンク切れの件数。件数をクリックすると S4 を絞り込んで開く）。
 トレース関係を「上位 → 下位」の一覧で表示し、各関係の網羅率を表示する。関係の追加・削除と、全関係の未トレース一覧の出力もこの画面で行う。",tracetool/static/views/dashboard.js,F-60;F-51;F-40;F-71
@@ -179,11 +182,15 @@ UI-05,画面,S4 項目一覧,"版の選択（既定は最新版。過去の版�
 UI-06,画面,S5 項目詳細,"S4 の右側のパネル。全列の値。関係ごとに上位・下位のリンク一覧（相手の ID と表示列、状態、生成元）。
 リンク先をクリックすると相手文書の S4 に遷移してその項目を選択する。リンクの追加（相手文書の項目を ID・表示列で検索して選ぶ）・削除（自動リンクは無効化）・元に戻す・確認済み。",tracetool/static/views/items.js,F-62;F-43;F-45
 UI-07,画面,S6 版の一覧・差分,"版の一覧（ラベル、日時、元ファイル名、行数）、版の閲覧・削除（確認ダイアログ）。
-2 つの版を選んで差分を表示する（列の変更、項目の追加・削除・変更。変更はセル単位で前後を表示）。差分の出力は表示中の差分の版を使う。",tracetool/static/views/versions.js,F-30;F-31;F-32;F-72
+2 つの版を選んで差分を表示する（列の変更、項目の追加・削除・変更。変更はセル単位で前後を表示し、実際に変わった文字を濃い色で強調する。文字単位の最長共通部分列で求め、文字数の積が 200 万を超える場合は共通の先頭・末尾以外をまとめて強調する）。差分の出力は表示中の差分の版を使う。",tracetool/static/views/versions.js;tracetool/static/textdiff.js,F-30;F-31;F-32;F-72;F-33
 UI-08,画面,S8 トレース状況,関係を選択し、網羅率、下位なし、上位なし、リンク切れ、要確認、全リンクの各タブを表示する。要確認は選択して一括で確認済みにできる。マトリクス・未トレース一覧の出力。,tracetool/static/views/trace.js,F-50;F-51;F-52;F-70;F-71;G-02
 UI-09,画面,カラム定義の補助操作,"文字列・enum の列に「使われている値から enum を作る」ボタンを置く。押すと値の一覧を確認ダイアログで示し、了承すると型を enum にして選択肢を入れる（取り込み画面ではファイルの値、文書の設定画面では最新版の値を使う）。
 参照 ID 列の参照先との間にトレース関係が無い場合は、その列に警告と「関係を登録（参照先を上位にする）」「下位にする」ボタンを出す。
-列名・ファイルの列・型の欄は幅を固定し、収まらない場合は表を横スクロールにする。",tracetool/static/views/schema-editor.js;tracetool/static/views/import.js;tracetool/static/views/docsettings.js,F-07;F-47;F-04
+列名・ファイルの列・型の欄は幅を固定し、収まらない場合は表を横スクロールにする。
+「列をまとめて追加」で、列名を区切り文字（自動判定・タブ・カンマ・改行・その他）で区切ったテキストを貼り付けて、文字列型の列をまとめて追加する。同じ名前の列は追加しない。取り込み画面では、同じ名前のファイルの列に対応付ける。",tracetool/static/views/schema-editor.js;tracetool/static/views/import.js;tracetool/static/views/docsettings.js,F-07;F-47;F-04;F-08
+UI-10,画面,S9 横並び表示,"#/documents/{id}/side?item= で開く。「上位 ｜ この項目 ｜ 下位」の 3 列に、項目をカード（ID、状態、生成元、全列の値）で並べる。上位・下位が複数ある場合は縦に並べ、列ごとにスクロールする。
+上位・下位のカードの ID を押すと、その項目を中心に表示し直す。「前の項目」「次の項目」（Alt + ← / →）で同じ文書の項目を順にたどる。項目詳細（S5）の「上位・下位と横並びで見る」から開く。",tracetool/static/views/side.js;tracetool/static/views/items.js,F-65;F-62
+UI-11,画面,確認ダイアログの方針,確認ダイアログは、元に戻せない削除（文書・版・トレース関係）だけに出す。enum への変換、リンクの削除・無効化などは確認せずに実行し、結果を画面右下の通知で知らせる（自動リンクの無効化は「元に戻す」で戻せる）。,tracetool/static/views/schema-editor.js;tracetool/static/views/items.js,N-07
 ERR-01,エラー処理,ログの方針,ログはデータフォルダの logs/ に出力する（1MB × 4 世代）。ログには項目の値を書かない。書くのは操作の種類、文書 ID、件数、エラーの種類まで。,tracetool/__main__.py;tracetool/app.py,C-01
 ERR-02,エラー処理,予期しない例外,例外メッセージ（値を含みうる）は書かず、例外の型と発生場所（ファイル名・行番号・関数名）だけを記録する。応答にも例外の型だけを返す。,tracetool/app.py,C-01
 ERR-03,エラー処理,入力の型の誤り,リクエスト本文の型の誤り（422）は、項目名だけを返し、入力値は返さない。,tracetool/app.py,C-01

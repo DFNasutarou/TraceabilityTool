@@ -386,3 +386,50 @@ def test_distinct_values_too_many(client):
     s = ok(client.put(f"/api/imports/{start['session_id']}/settings", json={"header_row": 1}))
     r = client.put(f"/api/imports/{start['session_id']}/distinct", json={"column": s["schema"]["columns"][1]})
     assert r.status_code == 400 and "多すぎます" in r.json()["error"]["message"]
+
+
+# --- 横並び表示 ---------------------------------------------------------------------
+
+
+def test_item_neighborhood(client):
+    req, scr, rel = setup(client)
+    do_import(client, req, "req.csv", req_csv())
+    do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)
+
+    # 上位の項目から見る: 下位にリンク先の全列が並ぶ
+    n = ok(client.get(f"/api/documents/{req}/neighborhood", params={"id": "REQ-002"}))
+    assert n["item"]["item_id"] == "REQ-002" and n["upper"] == []
+    assert (n["prev"], n["next"], n["position"], n["total"]) == ("REQ-001", "REQ-003", 2, 3)
+    lower = n["lower"][0]
+    assert lower["document"]["name"] == "画面定義書"
+    assert [e["item_id"] for e in lower["items"]] == ["SCR-01", "SCR-02"]  # 下位文書の並び順
+    assert lower["items"][0]["data"]["sname"] == "ログイン画面"
+
+    # 下位の項目から見る: リンク切れは data が None
+    n = ok(client.get(f"/api/documents/{scr}/neighborhood", params={"id": "SCR-04"}))
+    assert n["upper"][0]["items"] == [
+        {"link_id": n["upper"][0]["items"][0]["link_id"], "item_id": "REQ-999", "data": None, "invalid": [],
+         "status": "broken", "origin": "auto"}
+    ]
+    assert n["next"] is None
+
+    # 無効化したリンクは並べない
+    lid = ok(client.get(f"/api/versions/{ok(client.get(f'/api/documents/{scr}'))['latest_version_id']}/item",
+                        params={"id": "SCR-02"}))["relations"][0]["links"][0]["id"]
+    ok(client.delete(f"/api/links/{lid}"))
+    n = ok(client.get(f"/api/documents/{scr}/neighborhood", params={"id": "SCR-02"}))
+    assert n["upper"][0]["items"] == []
+    assert client.get(f"/api/documents/{scr}/neighborhood", params={"id": "NOPE"}).status_code == 404
+
+
+def test_static_files_are_served_under_versioned_path(client):
+    import re
+
+    html = client.get("/").text
+    m = re.search(r'src="(/static/[0-9a-f]{12})/vendor/vue\.global\.prod\.js"', html)
+    assert m, html
+    prefix = m.group(1)
+    r = client.get(f"{prefix}/app.js")
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
+    assert client.get(f"{prefix}/views/side.js").status_code == 200
+    assert client.get("/").headers["cache-control"] == "no-store"

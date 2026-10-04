@@ -203,3 +203,27 @@ ul.links li.inactive .link-actions { text-decoration: none; }
 .schema-editor .col-type { width: 110px; min-width: 110px; }
 .schema-editor .col-name, .schema-editor .col-src { width: 180px; min-width: 180px; }
 .schema-editor .detail-cell { min-width: 280px; }
+
+/* 横並び表示（上位 ｜ この項目 ｜ 下位） */
+.side-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+.side-col { min-width: 0; display: flex; flex-direction: column; }
+.side-col-head { margin: 0 0 6px; font-size: 15px; }
+.side-scroll { overflow-y: auto; max-height: calc(100vh - 190px); padding-right: 4px; }
+.side-group h3 { margin: 4px 0 6px; color: var(--sub); font-weight: 600; }
+.side-card { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; background: var(--panel); }
+.side-card.current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.side-card.broken { background: var(--err-bg); }
+.side-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.side-card-id { font-family: Consolas, "BIZ UDGothic", monospace; font-weight: 700; }
+.side-card .kv th { width: 30%; }
+@media (max-width: 900px) {
+  .side-grid { grid-template-columns: 1fr; }
+  .side-scroll { max-height: none; }
+}
+
+.bulk-add { border: 1px dashed var(--line); border-radius: 6px; padding: 8px 12px; margin-top: 8px; }
+.bulk-add textarea { font-family: Consolas, "BIZ UDGothic", monospace; }
+
+/* 差分: 変わった文字を濃い色で示す（セル全体の背景は薄い色） */
+.hl-del { background: rgba(220, 38, 38, 0.30); border-radius: 2px; text-decoration: line-through; text-decoration-color: rgba(180, 35, 24, 0.6); }
+.hl-ins { background: rgba(22, 163, 74, 0.32); border-radius: 2px; font-weight: 600; }

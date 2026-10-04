@@ -6,18 +6,19 @@ import ImportWizard from "./views/import.js";
 import ItemsView from "./views/items.js";
 import VersionsView from "./views/versions.js";
 import TraceView from "./views/trace.js";
+import SideView from "./views/side.js";
 
 const { createApp, computed } = Vue;
 
 const App = {
-  components: { Dashboard, DocSettings, ImportWizard, ItemsView, VersionsView, TraceView },
+  components: { Dashboard, DocSettings, ImportWizard, ItemsView, VersionsView, TraceView, SideView },
   setup() {
     const view = computed(() => {
       const p = route.parts;
       if (p[0] === "documents" && p[1] === "new") return { name: "DocSettings", props: { docId: null } };
       if (p[0] === "documents" && p[1]) {
         const docId = Number(p[1]);
-        const sub = { settings: "DocSettings", import: "ImportWizard", items: "ItemsView", versions: "VersionsView" }[p[2]];
+        const sub = { settings: "DocSettings", import: "ImportWizard", items: "ItemsView", versions: "VersionsView", side: "SideView" }[p[2]];
         if (sub) return { name: sub, props: { docId } };
       }
       if (p[0] === "trace") return { name: "TraceView", props: { relId: p[1] ? Number(p[1]) : null } };

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import traceback
 from pathlib import Path
@@ -9,7 +10,7 @@ from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -26,6 +27,20 @@ from .services import trace as trace_svc
 from .services import versions as ver_svc
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+def static_version() -> str:
+    """画面ファイルの内容から版番号を作る。
+
+    画面ファイルは /static/<版番号>/ の下で配信する。ツールを新しい版に差し替えると URL が変わるため、
+    ブラウザに残った古いファイル（JS モジュールはキャッシュされやすい）を使うことが無い。
+    """
+    h = hashlib.sha1()
+    for f in sorted(STATIC_DIR.rglob("*")):
+        if f.is_file():
+            h.update(f.relative_to(STATIC_DIR).as_posix().encode())
+            h.update(f.read_bytes())
+    return h.hexdigest()[:12]
 log = logging.getLogger("tracetool")
 
 
@@ -110,6 +125,7 @@ def create_app(db: Database, port: int | None = None, extra_hosts: tuple[str, ..
     sessions = importer.SessionStore()
     sessions.start_reaper()
     allowed_hosts = {"127.0.0.1", "localhost", *extra_hosts}
+    static_prefix = f"/static/{static_version()}"
 
     def _host_ok(hostname: str | None) -> bool:
         return (hostname or "").lower() in allowed_hosts
@@ -130,7 +146,12 @@ def create_app(db: Database, port: int | None = None, extra_hosts: tuple[str, ..
                 if not _host_ok(o.hostname) or (port is not None and o.port != port):
                     return _error("他のサイトからの操作は受け付けません", "forbidden_origin", 403)
         try:
-            return await call_next(request)
+            response = await call_next(request)
+            if request.url.path.startswith("/static/"):
+                # ツールを新しい版に差し替えたとき、ブラウザに残った古い画面ファイルを使わせない
+                # （毎回更新の有無を確認する。変わっていなければ 304 で済む）
+                response.headers["Cache-Control"] = "no-cache"
+            return response
         except Exception as exc:  # noqa: BLE001 - 予期しない例外はすべてここで 500 にする
             _log_unexpected(request, exc)
             return _error(f"予期しないエラーが発生しました（{type(exc).__name__}）", "internal", 500)
@@ -201,6 +222,12 @@ def create_app(db: Database, port: int | None = None, extra_hosts: tuple[str, ..
     def distinct_values(doc_id: int, key: str):
         with db.read() as conn:
             return items_svc.distinct_values(conn, doc_id, key)
+
+    @app.get("/api/documents/{doc_id}/neighborhood")
+    def item_neighborhood(doc_id: int, id: str):
+        # 横並び表示用。項目 ID は / を含み得るためクエリで受け取る
+        with db.read() as conn:
+            return items_svc.item_neighborhood(conn, doc_id, id)
 
     @app.get("/api/documents/{doc_id}/find")
     def find_items(doc_id: int, q: str = ""):
@@ -389,7 +416,8 @@ def create_app(db: Database, port: int | None = None, extra_hosts: tuple[str, ..
 
     @app.get("/")
     def index():
-        return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-store"})
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8").replace('"/static/', f'"{static_prefix}/')
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.mount(static_prefix, StaticFiles(directory=STATIC_DIR), name="static")
     return app
