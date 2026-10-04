@@ -31,7 +31,7 @@ const ItemCard = {
       <table v-else class="kv">
         <tr v-for="c in schema.columns.filter(c => c.type !== 'id')" :key="c.key">
           <th>{{ c.name }}</th>
-          <td class="pre" :class="{invalid: entry.invalid.includes(c.key)}">{{ fmtValue(entry.data[c.key]) }}</td>
+          <td class="pre" :class="{invalid: entry.invalid.includes(c.key)}">{{ fmtValue(entry.data[c.key], c) }}</td>
         </tr>
       </table>
     </div>

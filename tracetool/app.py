@@ -402,7 +402,15 @@ def create_app(db: Database, port: int | None = None, extra_hosts: tuple[str, ..
     def export_untraced(relation: int | None = None, format: str = "xlsx"):
         with db.read() as conn:
             sheets = export_svc.untraced_sheets(conn, relation)
-        return _download(sheets, format, "未トレース一覧")
+            if relation:
+                rel = rel_svc.get_relation(conn, relation)
+                up = doc_svc.get_document(conn, rel["upper_doc_id"])["name"]
+                lo = doc_svc.get_document(conn, rel["lower_doc_id"])["name"]
+                # 複数の関係を続けて出力しても取り違えないよう、関係名をファイル名に含める
+                name = f"未トレース一覧_{up}→{lo}"
+            else:
+                name = "未トレース一覧_全関係"
+        return _download(sheets, format, name)
 
     @app.get("/api/export/diff")
     def export_diff(request: Request, to: int, format: str = "xlsx"):

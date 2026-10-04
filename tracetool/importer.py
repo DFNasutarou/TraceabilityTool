@@ -147,6 +147,7 @@ def _start(store: SessionStore, doc_id: int, filename: str, fmt: str, data: byte
         "encoding": session.encoding,
         "sheets": sheets,
         "preview": session.raw_grid(session.sheets[0] if sheets else None)[:PREVIEW_ROWS],
+        "suggested_header_row": readers.suggest_header_row(session.raw_grid(session.sheets[0] if sheets else None)),
     }
 
 

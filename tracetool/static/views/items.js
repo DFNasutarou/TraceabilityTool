@@ -64,6 +64,10 @@ export default {
         return;
       }
       search.value = Object.fromEntries(detail.value.relations.map((g) => [g.relation_id, { q: "", results: [] }]));
+      if (window.matchMedia("(max-width: 900px)").matches) {
+        await Vue.nextTick();
+        document.querySelector(".split-side")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
     }
 
     onMounted(async () => {
@@ -217,7 +221,7 @@ export default {
             </thead>
             <tbody>
               <tr v-for="it in result.items" :key="it.item_id" @click="selectItem(it.item_id)" :class="{selected: route.query.item === it.item_id}">
-                <td v-for="c in columns" :key="c.key" :class="{invalid: it.invalid.includes(c.key), idcell: c.type === 'id'}">{{ fmtValue(it.data[c.key]) }}</td>
+                <td v-for="c in columns" :key="c.key" :class="{invalid: it.invalid.includes(c.key), idcell: c.type === 'id'}">{{ fmtValue(it.data[c.key], c) }}</td>
                 <template v-if="isLatest">
                   <td class="num">{{ result.has_upper ? it.trace?.upper_count : '-' }}</td>
                   <td class="num">{{ result.has_lower ? it.trace?.lower_count : '-' }}</td>
@@ -241,7 +245,7 @@ export default {
           <table class="kv">
             <tr v-for="c in detail.schema.columns" :key="c.key">
               <th>{{ c.name }}</th>
-              <td :class="{invalid: detail.item.invalid.includes(c.key)}" class="pre">{{ fmtValue(detail.item.data[c.key]) }}</td>
+              <td :class="{invalid: detail.item.invalid.includes(c.key)}" class="pre">{{ fmtValue(detail.item.data[c.key], c) }}</td>
             </tr>
           </table>
 
@@ -258,7 +262,7 @@ export default {
                 <span class="link-actions">
                   <button v-if="l.active && l.status === 'suspect'" class="btn small" @click="ackLink(l)">確認済み</button>
                   <button v-if="l.active" class="btn small danger-ghost" @click="removeLink(l)">{{ l.origin === 'auto' ? '無効化' : '削除' }}</button>
-                  <button v-else class="btn small" @click="restoreLink(l)">元に戻す</button>
+                  <button v-else class="btn small primary" @click="restoreLink(l)">元に戻す</button>
                 </span>
               </li>
             </ul>

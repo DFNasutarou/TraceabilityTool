@@ -41,6 +41,12 @@ def _evaluate(conn: sqlite3.Connection, rel: dict) -> dict:
     return result
 
 
+def _item_order(conn: sqlite3.Connection, doc_id: int) -> dict[str, int]:
+    """文書の最新版での {項目ID: 並び順}。"""
+    v = ver_svc.latest_version(conn, doc_id)
+    return {i["item_id"]: n for n, i in enumerate(ver_svc.load_items(conn, v["id"]))} if v else {}
+
+
 def _evaluate_uncached(conn: sqlite3.Connection, rel: dict) -> dict:
     upper_hashes = ver_svc.latest_hashes(conn, rel["upper_doc_id"])
     lower_hashes = ver_svc.latest_hashes(conn, rel["lower_doc_id"])
@@ -61,6 +67,16 @@ def _evaluate_uncached(conn: sqlite3.Connection, rel: dict) -> dict:
         if status != STATUS_BROKEN:
             upper_linked.add(link["upper_item_id"])
             lower_linked.add(link["lower_item_id"])
+    # 上位文書での並び順 → 下位文書での並び順に並べる（最新版に無い項目は最後）
+    up_order = _item_order(conn, rel["upper_doc_id"])
+    lo_order = _item_order(conn, rel["lower_doc_id"])
+    far = len(up_order) + len(lo_order)
+    links.sort(
+        key=lambda l: (
+            up_order.get(l["upper_item_id"], far), l["upper_item_id"],
+            lo_order.get(l["lower_item_id"], far), l["lower_item_id"],
+        )
+    )
     return {
         "relation": rel,
         "upper_hashes": upper_hashes,

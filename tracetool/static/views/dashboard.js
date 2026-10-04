@@ -9,11 +9,13 @@ export default {
     const relations = ref([]);
     const newRel = ref({ upper: "", lower: "" });
     const loading = ref(true);
+    const loaded = ref(false); // 初回の読み込みが終わったか
 
     async function load() {
       loading.value = true;
       try {
         [docs.value, relations.value] = await Promise.all([api.get("/api/documents"), api.get("/api/relations")]);
+        loaded.value = true;
       } finally {
         loading.value = false;
       }
@@ -35,7 +37,7 @@ export default {
     }
 
     onMounted(load);
-    return { docs, relations, newRel, loading, addRelation, deleteRelation, href, fmtDate, fmtPct, download };
+    return { docs, relations, newRel, loading, loaded, addRelation, deleteRelation, href, fmtDate, fmtPct, download };
   },
   template: `
     <section class="page">
@@ -44,7 +46,8 @@ export default {
         <div class="actions"><a class="btn primary" :href="href('/documents/new')">＋ 文書を追加</a></div>
       </div>
 
-      <p v-if="!loading && docs.length === 0" class="empty">
+      <p v-if="!loaded" class="sub">読み込み中…</p>
+      <p v-else-if="docs.length === 0" class="empty">
         文書がまだありません。「文書を追加」から仕様書・設計書を登録し、表を取り込んでください。
       </p>
       <table v-else class="grid">
@@ -93,24 +96,29 @@ export default {
           <button class="btn" @click="download('/api/export/untraced', {format: 'csv'})">CSV</button>
         </div>
       </div>
-      <table class="grid" v-if="relations.length">
+      <p v-if="!loaded" class="sub">読み込み中…</p>
+      <table class="grid relations-table" v-else-if="relations.length">
         <thead>
           <tr>
-            <th>上位文書</th><th></th><th>下位文書</th>
+            <th>関係（上位 → 下位）</th>
             <th class="num">上位の網羅率</th><th class="num">下位の網羅率</th>
-            <th class="num">リンク数</th><th class="num">要確認</th><th class="num">リンク切れ</th><th></th>
+            <th class="num">リンク</th><th class="num">要確認</th><th class="num">リンク切れ</th><th></th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="r in relations" :key="r.relation.id">
-            <td>{{ r.upper_name }}</td><td>→</td><td>{{ r.lower_name }}</td>
-            <td class="num">
-              <div class="meter"><span :style="{width: ((r.upper_coverage ?? 0) * 100) + '%'}"></span></div>
-              {{ fmtPct(r.upper_coverage) }} <span class="sub">（下位なし {{ r.upper_untraced }}）</span>
+            <td>
+              <a :href="href('/trace/' + r.relation.id)" title="トレース状況を開く"><b>{{ r.upper_name }} → {{ r.lower_name }}</b></a>
             </td>
             <td class="num">
+              {{ fmtPct(r.upper_coverage) }}
+              <div class="meter"><span :style="{width: ((r.upper_coverage ?? 0) * 100) + '%'}"></span></div>
+              <div class="sub">下位なし {{ r.upper_untraced }}</div>
+            </td>
+            <td class="num">
+              {{ fmtPct(r.lower_coverage) }}
               <div class="meter"><span :style="{width: ((r.lower_coverage ?? 0) * 100) + '%'}"></span></div>
-              {{ fmtPct(r.lower_coverage) }} <span class="sub">（上位なし {{ r.lower_untraced }}）</span>
+              <div class="sub">上位なし {{ r.lower_untraced }}</div>
             </td>
             <td class="num">{{ r.links }}</td>
             <td class="num" :class="{'warn-text': r.suspect}">{{ r.suspect }}</td>
@@ -122,7 +130,8 @@ export default {
           </tr>
         </tbody>
       </table>
-      <p v-else class="empty">トレース関係がありません。下のフォームで「上位文書 → 下位文書」を登録してください。</p>
+      <p v-else-if="docs.length >= 2" class="empty">トレース関係がありません。下のフォームで「上位文書 → 下位文書」を登録してください。</p>
+      <p v-else class="empty">トレース関係がありません。文書を 2 つ以上登録すると、ここで「上位文書 → 下位文書」の関係を登録できます（取り込み画面で参照先を選んだときにも登録できます）。</p>
 
       <div class="inline-form" v-if="docs.length >= 2">
         <label>上位

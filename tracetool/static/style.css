@@ -163,8 +163,7 @@ table.kv { width: 100%; border-collapse: collapse; margin: 8px 0; }
 .link-group { border-top: 1px solid var(--line); padding-top: 4px; }
 ul.links, ul.candidates { list-style: none; margin: 0; padding: 0; }
 ul.links li, ul.candidates li { display: flex; gap: 6px; align-items: center; padding: 3px 0; flex-wrap: wrap; }
-ul.links li.inactive { opacity: .55; text-decoration: line-through; }
-ul.links li.inactive .link-actions { text-decoration: none; }
+ul.links li.inactive > a, ul.links li.inactive > span:not(.link-actions) { opacity: .5; text-decoration: line-through; }
 .label { color: var(--sub); flex: 1; min-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .link-actions { display: inline-flex; gap: 4px; }
 .link-add { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 10px; }
@@ -228,3 +227,6 @@ ul.links li.inactive .link-actions { text-decoration: none; }
 /* 差分: 変わった文字を濃い色で示す（セル全体の背景は薄い色） */
 .hl-del { background: rgba(220, 38, 38, 0.30); border-radius: 2px; text-decoration: line-through; text-decoration-color: rgba(180, 35, 24, 0.6); }
 .hl-ins { background: rgba(22, 163, 74, 0.32); border-radius: 2px; font-weight: 600; }
+
+/* 文書一覧のトレース関係: 網羅率のバーは数値の下に小さく置き、表の幅を抑える */
+.relations-table .meter { display: block; width: 72px; margin: 2px 0 2px auto; }

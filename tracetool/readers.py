@@ -116,6 +116,20 @@ def read_sheet(wb, sheet_name: str) -> list[list[str]]:
     return grid
 
 
+def suggest_header_row(grid: list[list[str]], scan_rows: int = 30) -> int:
+    """見出しの行を推定する（1 始まり）。
+
+    先頭 scan_rows 行のうち、空でないセルが最も多い行の中で最初の行を見出しとみなす。
+    タイトル行や空行が上にある帳票（1 行目タイトル、3 行目見出し など）に対応するため。
+    """
+    best_row, best_count = 1, 0
+    for i, row in enumerate(grid[:scan_rows]):
+        count = sum(1 for v in row if str(v).strip())
+        if count > best_count:
+            best_row, best_count = i + 1, count
+    return best_row
+
+
 def build_table(grid: list[list[str]], header_row: int, sheet_name: str = "") -> Table:
     """header_row は 1 始まり。"""
     if header_row < 1:

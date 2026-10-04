@@ -442,3 +442,36 @@ def test_item_detail_links_follow_document_order(client):
     vid = do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)["version_id"]
     d = ok(client.get(f"/api/versions/{vid}/item", params={"id": "SCR-01"}))
     assert [l["item_id"] for l in d["relations"][0]["links"]] == ["REQ-001", "REQ-002"]
+
+
+# --- 2 回目のユーザビリティレビューの指摘 ----------------------------------------------
+
+
+def test_suggest_header_row():
+    assert readers.suggest_header_row([["画面定義書 第1版"], [], ["ID", "名前", "上位"], ["S1", "a", ""]]) == 3
+    assert readers.suggest_header_row([["ID", "名前"], ["A", "b"]]) == 1
+    assert readers.suggest_header_row([]) == 1
+
+
+def test_import_start_suggests_header_row(client):
+    doc = ok(client.post("/api/documents", json={"name": "S"}))["id"]
+    start = ok(client.post("/api/imports", data={"document_id": doc}, files={"file": ("s.xlsx", scr_xlsx())}))
+    assert start["suggested_header_row"] == 2
+
+
+def test_links_are_ordered_by_document_order(client):
+    req, scr, rel = setup(client)
+    do_import(client, req, "req.csv", req_csv())
+    do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)
+    pairs = [(l["upper_item_id"], l["lower_item_id"]) for l in ok(client.get(f"/api/trace/{rel}"))["links"]]
+    assert pairs == [("REQ-001", "SCR-01"), ("REQ-002", "SCR-01"), ("REQ-002", "SCR-02"), ("REQ-999", "SCR-04")]
+
+
+def test_untraced_export_filename_has_relation(client):
+    from urllib.parse import unquote
+
+    req, scr, rel = setup(client)
+    r = client.get(f"/api/export/untraced?relation={rel}&format=csv")
+    assert "未トレース一覧_要件定義書→画面定義書.csv" in unquote(r.headers["content-disposition"])
+    r = client.get("/api/export/untraced?format=csv")
+    assert "未トレース一覧_全関係.csv" in unquote(r.headers["content-disposition"])

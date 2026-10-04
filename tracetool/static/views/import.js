@@ -77,7 +77,7 @@ export default {
         }
         model.value = toEdit(null); // 別のファイルを選び直したら、定義の案を作り直す
         encoding.value = "";
-        headerRow.value = 1;
+        headerRow.value = start.value.suggested_header_row || 1;
         sheets.value = start.value.sheets.slice(0, 1);
         preview.value = start.value.preview;
         step.value = 2;
@@ -170,7 +170,7 @@ export default {
       await api.post("/api/relations", { upper_doc_id: upper, lower_doc_id: lower });
       toast("トレース関係を登録しました");
       await loadRelations();
-      onSchemaChange();
+      if (validation.value) await validate();
     }
 
     async function commit() {
@@ -260,7 +260,11 @@ export default {
           <span>取り込むシート（複数選択すると行を連結します。ヘッダは同じである必要があります）:</span>
           <label v-for="s in start.sheets" :key="s" class="check"><input type="checkbox" :value="s" v-model="sheets" @change="sheets.length && applySettings()"> {{ s }}</label>
         </div>
-        <p class="hint">プレビュー（先頭 {{ preview.length }} 行）。色の付いた行がヘッダ行です。</p>
+        <p class="hint">
+          プレビュー（先頭 {{ preview.length }} 行）。色の付いた行がヘッダ行（見出し）です。
+          <template v-if="start.suggested_header_row > 1">見出しの行を自動で推定し、{{ start.suggested_header_row }} 行目にしました。</template>
+          違う場合は、見出しの行をクリックして指定してください。
+        </p>
         <div class="scroll-x">
           <table class="grid compact raw">
             <tbody>
@@ -326,7 +330,7 @@ export default {
                 <thead><tr><th v-for="c in previewCols" :key="c.key">{{ c.name }}</th></tr></thead>
                 <tbody>
                   <tr v-for="it in validation.preview" :key="it.item_id">
-                    <td v-for="c in previewCols" :key="c.key" :class="{invalid: it.invalid.includes(c.key)}">{{ fmtValue(it.data[c.key]) }}</td>
+                    <td v-for="c in previewCols" :key="c.key" :class="{invalid: it.invalid.includes(c.key)}">{{ fmtValue(it.data[c.key], c) }}</td>
                   </tr>
                 </tbody>
               </table>

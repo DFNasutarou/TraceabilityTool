@@ -5,13 +5,19 @@ const { reactive } = Vue;
 export const toasts = reactive([]);
 let toastSeq = 0;
 
+const MAX_TOASTS = 4; // 画面を覆わないよう、古い通知から消す
+
 export function toast(message, kind = "info") {
   const id = ++toastSeq;
   toasts.push({ id, message, kind });
-  setTimeout(() => {
-    const i = toasts.findIndex((t) => t.id === id);
-    if (i >= 0) toasts.splice(i, 1);
-  }, kind === "error" ? 8000 : 3000);
+  while (toasts.length > MAX_TOASTS) toasts.shift();
+  setTimeout(() => dismissToast(id), kind === "error" ? 8000 : 3000);
+  return id;
+}
+
+export function dismissToast(id) {
+  const i = toasts.findIndex((t) => t.id === id);
+  if (i >= 0) toasts.splice(i, 1);
 }
 
 async function request(method, url, body) {
@@ -57,14 +63,16 @@ export function query(params) {
 
 // 出力ファイルをダウンロードする。押したことが分かるよう、開始・完了・エラーを通知する
 export async function download(url, params) {
-  toast("出力ファイルを作成しています…");
+  const pending = toast("出力ファイルを作成しています…");
   let res;
   try {
     res = await fetch(url + query(params));
   } catch (e) {
+    dismissToast(pending);
     toast("サーバに接続できません。ツールが起動しているか確認してください", "error");
     return;
   }
+  dismissToast(pending); // 「作成しています」は結果の通知に置き換える
   if (!res.ok) {
     const data = await res.json().catch(() => null);
     toast(data?.error?.message || `出力に失敗しました（${res.status}）`, "error");
@@ -92,11 +100,18 @@ function filenameFrom(disposition) {
 
 // --- 値の表示 ---------------------------------------------------------------
 
-export function fmtValue(value) {
+// col（カラム定義）を渡すと、リスト形式の値をその列の区切り文字で区切って表示する（元ファイルと見比べやすいように）
+export function fmtValue(value, col) {
   if (value === null || value === undefined) return "";
   if (value === true) return "○";
   if (value === false) return "×";
-  if (Array.isArray(value)) return value.map(fmtValue).join(", ");
+  if (Array.isArray(value)) {
+    const delims = col?.list?.delimiters || [];
+    // 改行・タブ・空白以外の区切り文字があれば、それで区切って表示する
+    const d = delims.find((x) => x !== "\n" && x !== "\t" && x !== " ");
+    const sep = d ? d + " " : delims.includes("\n") ? "\n" : ", ";
+    return value.map((v) => fmtValue(v)).join(sep);
+  }
   return String(value);
 }
 
