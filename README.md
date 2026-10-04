@@ -45,16 +45,18 @@ python packaging/build.py
 
 `dist/TraceabilityTool-windows/` または `dist/TraceabilityTool-linux/` ができます。`build/` と `dist/` は git の管理外です。
 
-GitHub Actions の「build」ワークフローを手動で実行する（または `v*` タグを push する）と、両 OS 版が成果物（Artifacts）として作られます。
+GitHub Actions の「build」ワークフローが、main への push のたびに自動で動き、両 OS 版が成果物（Artifacts）として作られます（README.md・docs/README.md だけの変更では動きません）。手動実行（Actions 画面の「Run workflow」）や `v*` タグの push でも動きます。
 
 ### Ubuntu 版の取得から実行まで（GitHub Actions を使う場合）
 
 #### 1. GitHub でビルドする
 
+main に push すると自動でビルドが始まる。push していない状態でビルドしたい場合は、手動で実行する。
+
 1. GitHub のリポジトリを開き、上部の **「Actions」** タブを開く。
 2. 左の一覧から **「build」** を選ぶ。
-3. 一覧の上の帯の右端にある **「Run workflow」** を押し、Branch が `main` のまま緑の **「Run workflow」** を押す。
-4. 一覧に実行中の行が出る。5〜10 分ほどで完了する（緑のチェックが成功、赤い × が失敗）。
+3. （手動で実行する場合のみ）一覧の上の帯の右端にある **「Run workflow」** を押し、Branch が `main` のまま緑の **「Run workflow」** を押す。
+4. 一覧の一番上の行が最新のビルド。5〜10 分ほどで完了する（緑のチェックが成功、赤い × が失敗）。
 
 #### 2. ダウンロードする
 

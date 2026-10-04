@@ -1,12 +1,22 @@
 # 配布フォルダ（Windows 版・Ubuntu 版）を作る。
 # PyInstaller は実行した OS 向けの実行ファイルしか作れないため、OS ごとにビルドする。
-# 手動実行（Actions 画面の「Run workflow」）または v* タグの push で動く。
+# main への push、v* タグの push、手動実行（Actions 画面の「Run workflow」）で動く。
 name: build
 
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     tags: ["v*"]
+    # 開発者向けの説明だけを変えた場合はビルドしない（操作マニュアルは配布物に入るのでビルドする）
+    paths-ignore:
+      - "README.md"
+      - "docs/README.md"
+
+# 続けて push した場合は、古い方のビルドを取り消して最新だけをビルドする
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:

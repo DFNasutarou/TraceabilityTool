@@ -18,7 +18,7 @@ STA-05,起動,ポートの確認,"起動前にポートが空いているか確�
 DST-01,配布,リポジトリと配布フォルダ,開発用リポジトリと配布フォルダを分ける。配布フォルダには、実行に必要なものと利用者向けの操作マニュアルだけを入れる（設計書・テスト・ソースは入れない）。,packaging/build.py,C-08
 DST-02,配布,ビルド,"python packaging/build.py で、実行した OS 向けの配布フォルダ dist/TraceabilityTool-<windows|linux>/ を作る。PyInstaller（onedir）を使い、利用者の PC に Python を不要にする。
 PyInstaller はクロスビルドできないため、Windows 版は Windows、Ubuntu 版は Ubuntu でビルドする。",packaging/build.py;packaging/entry.py,C-05;C-07;C-08
-DST-03,配布,GitHub Actions,".github/workflows/build.yml で Windows 版（windows-latest）と Ubuntu 版（ubuntu-22.04）を作る。手動実行または v* タグの push で動く。
+DST-03,配布,GitHub Actions,".github/workflows/build.yml で Windows 版（windows-latest）と Ubuntu 版（ubuntu-22.04）を作る。main への push（README.md・docs/README.md だけの変更を除く）、v* タグの push、手動実行で動く。続けて push した場合は古いビルドを取り消す。
 Ubuntu 版は実行権限を保つため tar.gz にまとめる。Windows ランナーは文字コードが cp1252 のため PYTHONUTF8=1 にする。",.github/workflows/build.yml,C-07;C-08
 DST-04,配布,配布フォルダの構成,実行ファイル（TraceabilityTool.exe / TraceabilityTool）、_internal/（Python 実行環境・ライブラリ・画面ファイル）、packaging/user_files/ の中身（操作マニュアル）。,packaging/build.py;packaging/user_files/操作マニュアル.md,C-08
 DST-05,配布,git の管理対象,build/ と dist/ は git の管理外。取り込み元になりうる *.xlsx / *.csv なども除外する（docs/ の設計書 CSV は例外）。,.gitignore,C-01
