@@ -181,7 +181,7 @@ export default {
           return;
         }
         // 確認ダイアログは出さず、結果を通知する（選択肢は欄で確認・修正でき、型も戻せる）
-        toast(`「${col.name}」列を enum にしました（${values.length} 種類の値を選択肢にしました）`);
+        toast(`「${col.name}」列を enum にしました（${values.length} 種類の値を、ファイルに出てきた順に選択肢にしました。順番や内容は選択肢の欄で直せます）`);
         col.type = "enum";
         col.ref_document_id = "";
         col.enumText = values.join("\n");

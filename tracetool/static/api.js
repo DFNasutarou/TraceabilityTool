@@ -55,13 +55,39 @@ export function query(params) {
   return s ? "?" + s : "";
 }
 
-export function download(url, params) {
+// 出力ファイルをダウンロードする。押したことが分かるよう、開始・完了・エラーを通知する
+export async function download(url, params) {
+  toast("出力ファイルを作成しています…");
+  let res;
+  try {
+    res = await fetch(url + query(params));
+  } catch (e) {
+    toast("サーバに接続できません。ツールが起動しているか確認してください", "error");
+    return;
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    toast(data?.error?.message || `出力に失敗しました（${res.status}）`, "error");
+    return;
+  }
+  const blob = await res.blob();
+  const filename = filenameFrom(res.headers.get("Content-Disposition")) || "export";
   const a = document.createElement("a");
-  a.href = url + query(params);
-  a.download = "";
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  toast(`ダウンロードしました: ${filename}（ブラウザのダウンロード先に保存されます）`);
+}
+
+function filenameFrom(disposition) {
+  if (!disposition) return null;
+  const star = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (star) return decodeURIComponent(star[1]);
+  const plain = disposition.match(/filename="([^"]+)"/i);
+  return plain ? plain[1] : null;
 }
 
 // --- 値の表示 ---------------------------------------------------------------

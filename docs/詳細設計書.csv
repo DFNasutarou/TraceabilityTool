@@ -152,7 +152,7 @@ API-08,API,GET /documents/{id}/find?q=,リンク追加用に、最新版から I
 API-09,API,DELETE /versions/{vid},版を削除する（PRC-11）。,tracetool/app.py,F-32
 API-10,API,GET /versions/{vid}/items,"項目一覧。クエリ: q（全文）、f.<列キー>（列ごとの部分一致。f.__invalid で警告セルのある行のみ）、sort（列キー / upper_count / lower_count）、desc、trace（no_upper / no_lower / suspect / broken）、page、size。
 応答に、最新版か、上位・下位の関係があるかを含める。",tracetool/app.py;tracetool/services/items.py,F-61;F-63;F-64
-API-11,API,GET /versions/{vid}/item?id=,項目の詳細と、関係ごとの上位・下位のリンク（状態付き。無効化した自動リンクも含む）。,tracetool/app.py;tracetool/services/items.py,F-62
+API-11,API,GET /versions/{vid}/item?id=,項目の詳細と、関係ごとの上位・下位のリンク（状態付き。無効化した自動リンクも含む）。リンクは相手文書での並び順（リンク切れは最後）に並べる。,tracetool/app.py;tracetool/services/items.py,F-62
 API-12,API,GET /diff?from={vid}&to={vid},2 つの版の差分（PRC-18、PRC-19）。,tracetool/app.py;tracetool/services/diff.py,F-31
 API-13,API,GET /relations,トレース関係の一覧（網羅率・リンク数・要確認・リンク切れの要約付き）。,tracetool/app.py,F-40;F-51
 API-14,API,POST /relations,関係を作成する（PRC-12。循環ならエラー）。,tracetool/app.py,F-40
@@ -169,9 +169,10 @@ API-24,API,GET /export/diff?from={vid}&to={vid}&format=xlsx|csv,差分を出力�
 API-25,API,POST /imports/text,貼り付けたテキストから取り込みを始める（PRC-25）。本文: document_id、text、format（auto / csv / tsv）。,tracetool/app.py,F-19
 API-26,API,使われている値の取得,PUT /imports/{sid}/distinct（取り込み中）、GET /documents/{id}/distinct?key=（取り込み後）（PRC-26）。,tracetool/app.py,F-07
 API-27,API,GET /documents/{id}/neighborhood?id=,横並び表示用。項目（最新版）の全列と、関係ごとの上位・下位のリンク先項目の全列（無効化したリンクは除く。リンク切れは data なし）、各文書のカラム定義、同じ文書の前後の項目 ID と位置を返す。リンク先は相手文書での並び順に並べる。,tracetool/app.py;tracetool/services/items.py,F-65
-UI-01,画面,共通,ハッシュ形式のルーティング（#/documents/3/items など）で、1 枚の HTML 内で画面を切り替える。エラーは画面右下にトースト表示する。文言はすべて日本語。,tracetool/static/app.js;tracetool/static/router.js;tracetool/static/api.js,N-05
+UI-01,画面,共通,"ハッシュ形式のルーティング（#/documents/3/items など）で、1 枚の HTML 内で画面を切り替える。エラーは画面右下にトースト表示する。文言はすべて日本語。
+出力ボタンは、ファイルを取得してからブラウザに保存させ、「作成しています」「ダウンロードしました: ファイル名」を通知する（失敗したらエラーを通知する）。表が画面に収まらない場合は、その枠の中だけで横スクロールする（ページ全体ははみ出さない）。",tracetool/static/app.js;tracetool/static/router.js;tracetool/static/api.js;tracetool/static/style.css,N-05;F-70;F-71
 UI-02,画面,S1 ダッシュボード,"文書の一覧（最新版、項目数、上位なし・下位なし・要確認・リンク切れの件数。件数をクリックすると S4 を絞り込んで開く）。
-トレース関係を「上位 → 下位」の一覧で表示し、各関係の網羅率を表示する。関係の追加・削除と、全関係の未トレース一覧の出力もこの画面で行う。",tracetool/static/views/dashboard.js,F-60;F-51;F-40;F-71
+トレース関係を「上位 → 下位」の一覧で表示し、各関係の網羅率を表示する。関係の追加・削除と、全関係の未トレース一覧の出力（Excel / CSV）もこの画面で行う。",tracetool/static/views/dashboard.js,F-60;F-51;F-40;F-71
 UI-03,画面,S2 文書の設定,"名前・説明。カラム定義の編集（列の追加・削除・並べ替え、型、リスト形式と区切り文字、enum の選択肢、bool の真偽文字列、参照先文書、表示列）。文書の削除。
 詳細設定の内容が増えても、列名の入力欄は幅を固定して縮めない。",tracetool/static/views/docsettings.js;tracetool/static/views/schema-editor.js,F-01;F-02;F-03;F-04
 UI-04,画面,S3 取り込み,"3 ステップのウィザード: 1. ファイル選択またはテキストの貼り付け → 2. 読み込み設定（文字コード、ヘッダ行、シート。プレビューの行をクリックしてヘッダ行を指定できる）→ 3. 列の対応付けと検証（カラム定義の編集、未対応のファイルの列の追加、エラー・警告・プレビュー、版のラベル）。
@@ -186,9 +187,9 @@ UI-07,画面,S6 版の一覧・差分,"版の一覧（ラベル、日時、元�
 UI-08,画面,S8 トレース状況,関係を選択し、網羅率、下位なし、上位なし、リンク切れ、要確認、全リンクの各タブを表示する。要確認は選択して一括で確認済みにできる。マトリクス・未トレース一覧の出力。,tracetool/static/views/trace.js,F-50;F-51;F-52;F-70;F-71;G-02
 UI-09,画面,カラム定義の補助操作,"文字列・enum の列に「使われている値から enum を作る」ボタンを置く。押すと値の一覧を確認ダイアログで示し、了承すると型を enum にして選択肢を入れる（取り込み画面ではファイルの値、文書の設定画面では最新版の値を使う）。
 参照 ID 列の参照先との間にトレース関係が無い場合は、その列に警告と「関係を登録（参照先を上位にする）」「下位にする」ボタンを出す。
-列名・ファイルの列・型の欄は幅を固定し、収まらない場合は表を横スクロールにする。
+列名・ファイルの列・型の欄は幅を固定する。詳細設定の欄（警告文・ボタン・bool の真偽文字列）は折り返して全文を表示し、狭い画面では真・偽の欄を縦に並べる。enum に変換したときは、選択肢がファイルに出てきた順であることと、欄で直せることを通知する。
 「列をまとめて追加」で、列名を区切り文字（自動判定・タブ・カンマ・改行・その他）で区切ったテキストを貼り付けて、文字列型の列をまとめて追加する。同じ名前の列は追加しない。取り込み画面では、同じ名前のファイルの列に対応付ける。",tracetool/static/views/schema-editor.js;tracetool/static/views/import.js;tracetool/static/views/docsettings.js,F-07;F-47;F-04;F-08
-UI-10,画面,S9 横並び表示,"#/documents/{id}/side?item= で開く。「上位 ｜ この項目 ｜ 下位」の 3 列に、項目をカード（ID、状態、生成元、全列の値）で並べる。上位・下位が複数ある場合は縦に並べ、列ごとにスクロールする。
+UI-10,画面,S9 横並び表示,"#/documents/{id}/side?item= で開く。「上位 ｜ この項目 ｜ 下位」の 3 列に、項目をカード（ID、状態、生成元、全列の値）で並べる。上位・下位が複数ある場合は縦に並べ、列ごとにスクロールする。画面の幅が狭くても 3 列を保ち（1 列あたり最小 260px）、収まらない分は横にスクロールする。
 上位・下位のカードの ID を押すと、その項目を中心に表示し直す。「前の項目」「次の項目」（Alt + ← / →）で同じ文書の項目を順にたどる。項目詳細（S5）の「上位・下位と横並びで見る」から開く。",tracetool/static/views/side.js;tracetool/static/views/items.js,F-65;F-62
 UI-11,画面,確認ダイアログの方針,確認ダイアログは、元に戻せない削除（文書・版・トレース関係）だけに出す。enum への変換、リンクの削除・無効化などは確認せずに実行し、結果を画面右下の通知で知らせる（自動リンクの無効化は「元に戻す」で戻せる）。,tracetool/static/views/schema-editor.js;tracetool/static/views/items.js,N-07
 ERR-01,エラー処理,ログの方針,ログはデータフォルダの logs/ に出力する（1MB × 4 世代）。ログには項目の値を書かない。書くのは操作の種類、文書 ID、件数、エラーの種類まで。,tracetool/__main__.py;tracetool/app.py,C-01

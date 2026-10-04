@@ -50,7 +50,7 @@ textarea { width: 100%; resize: vertical; }
 .topbar nav a.active { color: var(--text); border-bottom-color: var(--accent); text-decoration: none; }
 
 .main { padding: 16px 20px 40px; }
-.page { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 16px; margin-bottom: 16px; }
+.page { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 16px; margin-bottom: 16px; }
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 .page-head h2 { margin: 0; }
 .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -186,26 +186,31 @@ ul.links li.inactive .link-actions { text-decoration: none; }
   .form-grid { grid-template-columns: 1fr; }
 }
 
-/* カラム定義: 詳細設定の内容が増えても、列名・ファイルの列の入力欄が縮まないよう幅を固定する */
-.schema-editor .col-name { width: 200px; min-width: 200px; }
-.schema-editor .col-src { width: 200px; min-width: 200px; }
+/* カラム定義: 詳細設定の内容が増えても、列名・ファイルの列・型の欄が縮まないよう幅を固定する。
+   詳細設定の欄は折り返して全文が見えるようにする（狭い画面で右端が切れないように） */
+.schema-editor { overflow-x: auto; }
+.schema-editor .col-name, .schema-editor .col-src { width: 170px; min-width: 150px; }
+.schema-editor .col-type { width: 105px; min-width: 105px; }
+.schema-editor .detail-cell { min-width: 240px; }
 .schema-editor .delims { display: inline-flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; }
 .schema-editor .delims label.check { margin-right: 0; }
 .schema-editor .delims input.short { width: 80px; }
 .schema-editor .relation-warn { flex-basis: 100%; background: var(--warn-bg); color: var(--warn); padding: 4px 8px; border-radius: 4px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.schema-editor .relation-warn .btn, .schema-editor .detail-cell .btn { white-space: normal; text-align: left; }
+.schema-editor .bool-grid { min-width: 0; flex-basis: 100%; }
+@media (max-width: 1100px) {
+  .schema-editor .bool-grid { grid-template-columns: 1fr; }
+}
 
 /* 取り込み: ファイル選択とテキスト貼り付けの切り替え */
 .source-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
 .source-tabs button { border: 1px solid transparent; border-bottom: none; background: none; padding: 6px 14px; cursor: pointer; color: var(--sub); border-radius: 4px 4px 0 0; }
 .source-tabs button.active { border-color: var(--line); background: var(--panel); color: var(--text); font-weight: 600; margin-bottom: -1px; }
 .paste-area { width: 100%; min-height: 180px; font-family: Consolas, "BIZ UDGothic", monospace; font-size: 12px; white-space: pre; }
-.schema-editor { overflow-x: auto; }
-.schema-editor .col-type { width: 110px; min-width: 110px; }
-.schema-editor .col-name, .schema-editor .col-src { width: 180px; min-width: 180px; }
-.schema-editor .detail-cell { min-width: 280px; }
 
 /* 横並び表示（上位 ｜ この項目 ｜ 下位） */
-.side-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+/* 狭い画面でも 3 列の横並びを保ち、収まらない場合は横にスクロールする */
+.side-grid { display: grid; grid-template-columns: repeat(3, minmax(260px, 1fr)); gap: 12px; overflow-x: auto; }
 .side-col { min-width: 0; display: flex; flex-direction: column; }
 .side-col-head { margin: 0 0 6px; font-size: 15px; }
 .side-scroll { overflow-y: auto; max-height: calc(100vh - 190px); padding-right: 4px; }
@@ -216,10 +221,6 @@ ul.links li.inactive .link-actions { text-decoration: none; }
 .side-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .side-card-id { font-family: Consolas, "BIZ UDGothic", monospace; font-weight: 700; }
 .side-card .kv th { width: 30%; }
-@media (max-width: 900px) {
-  .side-grid { grid-template-columns: 1fr; }
-  .side-scroll { max-height: none; }
-}
 
 .bulk-add { border: 1px dashed var(--line); border-radius: 6px; padding: 8px 12px; margin-top: 8px; }
 .bulk-add textarea { font-family: Consolas, "BIZ UDGothic", monospace; }

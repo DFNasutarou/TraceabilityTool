@@ -128,8 +128,13 @@ def item_detail(conn: sqlite3.Connection, version_id: int, item_id: str) -> dict
                         "origin": trace_svc.link_origin(link),
                         "auto": bool(link["auto_by_upper"] or link["auto_by_lower"]),
                         "status": trace_svc.link_status(link, upper_hashes, lower_hashes),
+                        "_order": other_item["row_no"] if other_item else float("inf"),
                     }
                 )
+            # 相手文書での並び順にする（リンク切れは最後）
+            entries.sort(key=lambda e: (e["_order"], e["item_id"]))
+            for e in entries:
+                del e["_order"]
             groups.append(
                 {
                     "relation_id": rel["id"],

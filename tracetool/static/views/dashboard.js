@@ -90,6 +90,7 @@ export default {
         <h2>トレース関係（上位 → 下位）</h2>
         <div class="actions" v-if="relations.length">
           <button class="btn" @click="download('/api/export/untraced', {format: 'xlsx'})">未トレース一覧（全関係）Excel</button>
+          <button class="btn" @click="download('/api/export/untraced', {format: 'csv'})">CSV</button>
         </div>
       </div>
       <table class="grid" v-if="relations.length">

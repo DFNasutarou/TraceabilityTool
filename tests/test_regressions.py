@@ -433,3 +433,12 @@ def test_static_files_are_served_under_versioned_path(client):
     assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
     assert client.get(f"{prefix}/views/side.js").status_code == 200
     assert client.get("/").headers["cache-control"] == "no-store"
+
+
+def test_item_detail_links_follow_document_order(client):
+    """項目詳細のリンクは、相手文書での並び順（ファイルの記載順）にする。"""
+    req, scr, rel = setup(client)
+    do_import(client, req, "req.csv", req_csv())
+    vid = do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)["version_id"]
+    d = ok(client.get(f"/api/versions/{vid}/item", params={"id": "SCR-01"}))
+    assert [l["item_id"] for l in d["relations"][0]["links"]] == ["REQ-001", "REQ-002"]
