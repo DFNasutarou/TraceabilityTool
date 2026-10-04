@@ -153,6 +153,38 @@ def item_detail(conn: sqlite3.Connection, version_id: int, item_id: str) -> dict
     }
 
 
+def display_schema(conn: sqlite3.Connection, doc_id: int, schema: dict) -> dict:
+    """表示用のカラム定義。版のカラム定義に、文書の作業中定義の重要度を重ねる。
+
+    重要度は表示だけに使う設定なので、取り込み直さなくても文書の設定画面での変更がすぐに表示に反映されるようにする。
+    """
+    from . import documents as doc_svc
+
+    working = {c["key"]: c for c in colschema.columns(doc_svc.get_document(conn, doc_id)["schema"])}
+    cols = []
+    for c in colschema.columns(schema):
+        w = working.get(c["key"])
+        cols.append({**c, "importance": (w or c).get("importance") or "mid"})
+    return {**schema, "columns": cols}
+
+
+def latest_items(conn: sqlite3.Connection, doc_id: int) -> dict:
+    """横並び表示の「この項目」の列用: 文書の最新版の全項目（取り込み順）と表示用のカラム定義。"""
+    from ..errors import AppError
+
+    latest = ver_svc.latest_version(conn, doc_id)
+    if latest is None:
+        raise AppError("まだ取り込まれていません")
+    return {
+        "version_id": latest["id"],
+        "schema": display_schema(conn, doc_id, latest["schema"]),
+        "items": [
+            {"item_id": i["item_id"], "data": i["data"], "invalid": i["invalid"]}
+            for i in ver_svc.load_items(conn, latest["id"])
+        ],
+    }
+
+
 def item_neighborhood(conn: sqlite3.Connection, doc_id: int, item_id: str) -> dict:
     """横並び表示用: 項目と、そのリンク先の上位項目・下位項目の全列（各文書の最新版）。
 
@@ -209,13 +241,13 @@ def item_neighborhood(conn: sqlite3.Connection, doc_id: int, item_id: str) -> di
             {
                 "relation_id": rel["id"],
                 "document": {"id": other_id, "name": doc_svc.get_document(conn, other_id)["name"]},
-                "schema": other_latest["schema"] if other_latest else colschema.empty_schema(),
+                "schema": display_schema(conn, other_id, other_latest["schema"]) if other_latest else colschema.empty_schema(),
                 "items": entries,
             }
         )
     return {
         "document": {"id": doc_id, "name": doc["name"]},
-        "schema": latest["schema"],
+        "schema": display_schema(conn, doc_id, latest["schema"]),
         "item": item,
         "prev": order[pos - 1] if pos > 0 else None,
         "next": order[pos + 1] if pos + 1 < len(order) else None,

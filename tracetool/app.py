@@ -223,6 +223,11 @@ def create_app(db: Database, port: int | None = None, extra_hosts: tuple[str, ..
         with db.read() as conn:
             return items_svc.distinct_values(conn, doc_id, key)
 
+    @app.get("/api/documents/{doc_id}/latest-items")
+    def latest_items(doc_id: int):
+        with db.read() as conn:
+            return items_svc.latest_items(conn, doc_id)
+
     @app.get("/api/documents/{doc_id}/neighborhood")
     def item_neighborhood(doc_id: int, id: str):
         # 横並び表示用。項目 ID は / を含み得るためクエリで受け取る

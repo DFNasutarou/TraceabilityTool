@@ -10,6 +10,7 @@ import unicodedata
 from typing import Any
 
 COLUMN_TYPES = ("id", "int", "string", "enum", "bool")
+IMPORTANCE = ("low", "mid", "high")
 
 DEFAULT_BOOL_TRUE = ["○", "◯", "〇", "Yes", "Y", "TRUE", "1", "有", "あり"]
 DEFAULT_BOOL_FALSE = ["×", "✕", "✖", "No", "N", "FALSE", "0", "無", "なし"]
@@ -62,6 +63,8 @@ def normalize_schema(schema: dict) -> dict:
             "enum_values": None,
             "bool_values": None,
             "ref_document_id": None,
+            # 横並び表示での重要度（low: 小さく上部 / mid: 普通の大きさで下部 / high: 大きく中央）
+            "importance": raw.get("importance") if raw.get("importance") in IMPORTANCE else "mid",
         }
         lst = raw.get("list")
         if lst and lst.get("delimiters"):

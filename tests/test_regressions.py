@@ -475,3 +475,34 @@ def test_untraced_export_filename_has_relation(client):
     assert "未トレース一覧_要件定義書→画面定義書.csv" in unquote(r.headers["content-disposition"])
     r = client.get("/api/export/untraced?format=csv")
     assert "未トレース一覧_全関係.csv" in unquote(r.headers["content-disposition"])
+
+
+# --- 横並び表示: 重要度と全項目の一覧 ----------------------------------------------------
+
+
+def test_column_importance_and_latest_items(client):
+    req, scr, rel = setup(client)
+    do_import(client, req, "req.csv", req_csv())
+    do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)
+
+    # 既定は mid
+    items = ok(client.get(f"/api/documents/{req}/latest-items"))
+    assert [i["item_id"] for i in items["items"]] == ["REQ-001", "REQ-002", "REQ-003"]
+    assert {c["importance"] for c in items["schema"]["columns"]} == {"mid"}
+
+    # 文書の設定で重要度を変えると、取り込み直さなくても表示に反映される
+    d = ok(client.get(f"/api/documents/{req}"))
+    for c in d["schema"]["columns"]:
+        c["importance"] = {"rname": "high", "rnote": "low"}.get(c["key"], "mid")
+    ok(client.put(f"/api/documents/{req}", json={"name": d["name"], "schema": d["schema"]}))
+    imp = {c["key"]: c["importance"] for c in ok(client.get(f"/api/documents/{req}/latest-items"))["schema"]["columns"]}
+    assert imp["rname"] == "high" and imp["rnote"] == "low" and imp["rpri"] == "mid"
+    # 下位から見たときの上位文書のカラム定義にも反映される
+    n = ok(client.get(f"/api/documents/{scr}/neighborhood", params={"id": "SCR-01"}))
+    up_imp = {c["key"]: c["importance"] for c in n["upper"][0]["schema"]["columns"]}
+    assert up_imp["rname"] == "high"
+
+    # 不正な値は mid にそろえる
+    d["schema"]["columns"][1]["importance"] = "super"
+    ok(client.put(f"/api/documents/{req}", json={"name": d["name"], "schema": d["schema"]}))
+    assert ok(client.get(f"/api/documents/{req}"))["schema"]["columns"][1]["importance"] == "mid"

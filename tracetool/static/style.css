@@ -230,3 +230,15 @@ ul.links li.inactive > a, ul.links li.inactive > span:not(.link-actions) { opaci
 
 /* 文書一覧のトレース関係: 網羅率のバーは数値の下に小さく置き、表の幅を抑える */
 .relations-table .meter { display: block; width: 72px; margin: 2px 0 2px auto; }
+
+/* 横並び表示のカード: 列の重要度で表示を変える（低 = 小さく上部 / 高 = 大きく中央 / 中 = 普通の大きさで下部） */
+.side-card .kv { margin: 4px 0; }
+.side-card .kv.imp-low { font-size: 11.5px; color: var(--sub); }
+.side-card .kv.imp-low th { color: var(--sub); }
+.side-card .kv.imp-high { font-size: 16px; line-height: 1.5; padding: 4px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.side-card .kv.imp-high th { font-size: 13px; }
+.side-card .kv.imp-high td { font-weight: 600; color: var(--text); }
+.side-card .kv.imp-mid { font-size: 13.5px; }
+.side-card.selectable { cursor: pointer; }
+.side-card.selectable:hover { border-color: var(--accent); }
+.side-more { display: block; width: 100%; margin: 4px 0 10px; text-align: center; }

@@ -39,7 +39,8 @@ docs/           要件定義書・詳細設計書（このツールで読み込�
 API はルータに分割せず app.py に直接定義する。",tracetool/,C-02
 DAT-01,データモデル,カラム定義（JSON）,"文書の「作業中のカラム定義」と、各版の「取り込み時点のカラム定義」は同じ JSON 形式で保存する。
 {""columns"": [{""key"": ""c1a2b3"", ""name"": ""要件ID"", ""source_header"": ""要件ID"", ""type"": ""id"", ""list"": null, ""enum_values"": null, ""bool_values"": null, ""ref_document_id"": null}, ...], ""display_column"": null}
-name: 表示名。source_header: 取り込み元ファイルのヘッダ名（列の自動対応付けに使う）。type: id / int / string / enum / bool。",tracetool/colschema.py,F-02;F-05;T-04
+name: 表示名。source_header: 取り込み元ファイルのヘッダ名（列の自動対応付けに使う）。type: id / int / string / enum / bool。
+importance: 横並び表示での重要度（low / mid / high。既定は mid。不正な値は mid にそろえる）。",tracetool/colschema.py,F-02;F-05;T-04;F-66
 DAT-02,データモデル,列の内部キー,key は作成時にランダムな文字列を割り当て、以後変えない。差分・ハッシュはこのキーで行う。,tracetool/colschema.py;tracetool/static/views/schema-editor.js,F-06
 DAT-03,データモデル,型の制約,id 型の列はちょうど 1 つ。id 型はリスト形式にできない。ref_document_id は string 型にのみ指定でき、自分自身は指定できない。enum は選択肢が 1 つ以上必要。,tracetool/colschema.py;tracetool/services/documents.py,F-02;F-03;F-04
 DAT-04,データモデル,リスト形式,"list: {""delimiters"": [...]} で区切り文字の配列を持つ。改行・タブは文字そのもの（\n・\t）で保存する。
@@ -172,6 +173,8 @@ API-24,API,GET /export/diff?from={vid}&to={vid}&format=xlsx|csv,差分を出力�
 API-25,API,POST /imports/text,貼り付けたテキストから取り込みを始める（PRC-25）。本文: document_id、text、format（auto / csv / tsv）。,tracetool/app.py,F-19
 API-26,API,使われている値の取得,PUT /imports/{sid}/distinct（取り込み中）、GET /documents/{id}/distinct?key=（取り込み後）（PRC-26）。,tracetool/app.py,F-07
 API-27,API,GET /documents/{id}/neighborhood?id=,横並び表示用。項目（最新版）の全列と、関係ごとの上位・下位のリンク先項目の全列（無効化したリンクは除く。リンク切れは data なし）、各文書のカラム定義、同じ文書の前後の項目 ID と位置を返す。リンク先は相手文書での並び順に並べる。,tracetool/app.py;tracetool/services/items.py,F-65
+API-28,API,GET /documents/{id}/latest-items,横並び表示の中央の列用。文書の最新版の全項目（取り込み順。ID・全列の値・警告の列）と、表示用のカラム定義を返す。,tracetool/app.py;tracetool/services/items.py,F-65
+API-29,API,表示用のカラム定義,横並び表示に返すカラム定義は、版のカラム定義に、文書の作業中カラム定義の重要度を列キーで重ねたもの（重要度は表示だけの設定なので、取り込み直さなくても反映する）。neighborhood・latest-items の両方で使う。,tracetool/services/items.py,F-66
 UI-01,画面,共通,"ハッシュ形式のルーティング（#/documents/3/items など）で、1 枚の HTML 内で画面を切り替える。エラーは画面右下にトースト表示する。文言はすべて日本語。
 出力ボタンは、ファイルを取得してからブラウザに保存させ、「作成しています」「ダウンロードしました: ファイル名」を通知する（失敗したらエラーを通知する）。表が画面に収まらない場合は、その枠の中だけで横スクロールする（ページ全体ははみ出さない）。
 通知は同時に 4 件までとし、古いものから消す。出力の「作成しています」は結果の通知に置き換える。リスト形式の値は、その列の区切り文字（改行・タブ・空白以外の最初のもの）で区切って表示する。",tracetool/static/app.js;tracetool/static/router.js;tracetool/static/api.js;tracetool/static/style.css,N-05;F-70;F-71
@@ -179,7 +182,8 @@ UI-02,画面,S1 ダッシュボード,"文書の一覧（最新版、項目数�
 トレース関係を「上位 → 下位」の一覧で表示し、各関係の網羅率を表示する。関係の追加・削除と、全関係の未トレース一覧の出力（Excel / CSV）もこの画面で行う。
 初回の読み込みが終わるまでは「読み込み中…」と表示し、「文書がありません」「関係がありません」を出さない。トレース関係の表は関係名を 1 列にまとめ、関係名を押すとトレース状況を開く（狭い画面でもはみ出しにくくする）。文書が 2 つ未満のときは、2 つ以上登録すると関係を登録できることを案内する。",tracetool/static/views/dashboard.js,F-60;F-51;F-40;F-71
 UI-03,画面,S2 文書の設定,"名前・説明。カラム定義の編集（列の追加・削除・並べ替え、型、リスト形式と区切り文字、enum の選択肢、bool の真偽文字列、参照先文書、表示列）。文書の削除。
-詳細設定の内容が増えても、列名の入力欄は幅を固定して縮めない。",tracetool/static/views/docsettings.js;tracetool/static/views/schema-editor.js,F-01;F-02;F-03;F-04
+詳細設定の内容が増えても、列名の入力欄は幅を固定して縮めない。
+各列に横並び表示での重要度（低・中・高）を選ぶ欄を置く。",tracetool/static/views/docsettings.js;tracetool/static/views/schema-editor.js,F-01;F-02;F-03;F-04;F-66
 UI-04,画面,S3 取り込み,"3 ステップのウィザード: 1. ファイル選択またはテキストの貼り付け → 2. 読み込み設定（文字コード、ヘッダ行、シート。プレビューの行をクリックしてヘッダ行を指定できる）→ 3. 列の対応付けと検証（カラム定義の編集、未対応のファイルの列の追加、エラー・警告・プレビュー、版のラベル）。
 定義を変更したら再検証するまで確定できない。確定せずに画面を離れたらセッションを破棄する。
 ヘッダ行は推定値を初期値にし、推定したことを表示する。「関係を登録」を押したら、自動で検証し直す（古いエラーを残さない）。",tracetool/static/views/import.js,F-11;F-12;F-13;F-15;F-16;F-17;F-19
@@ -197,8 +201,10 @@ UI-09,画面,カラム定義の補助操作,"文字列・enum の列に「使わ
 参照 ID 列の参照先との間にトレース関係が無い場合は、その列に警告と「関係を登録（参照先を上位にする）」「下位にする」ボタンを出す。
 列名・ファイルの列・型の欄は幅を固定する。詳細設定の欄（警告文・ボタン・bool の真偽文字列）は折り返して全文を表示し、狭い画面では真・偽の欄を縦に並べる。enum に変換したときは、選択肢がファイルに出てきた順であることと、欄で直せることを通知する。
 「列をまとめて追加」で、列名を区切り文字（自動判定・タブ・カンマ・改行・その他）で区切ったテキストを貼り付けて、文字列型の列をまとめて追加する。同じ名前の列は追加しない。取り込み画面では、同じ名前のファイルの列に対応付ける。",tracetool/static/views/schema-editor.js;tracetool/static/views/import.js;tracetool/static/views/docsettings.js,F-07;F-47;F-04;F-08
-UI-10,画面,S9 横並び表示,"#/documents/{id}/side?item= で開く。「上位 ｜ この項目 ｜ 下位」の 3 列に、項目をカード（ID、状態、生成元、全列の値）で並べる。上位・下位が複数ある場合は縦に並べ、列ごとにスクロールする。画面の幅が狭くても 3 列を保ち（1 列あたり最小 260px）、収まらない分は横にスクロールする。
-上位・下位のカードの ID を押すと、その項目を中心に表示し直す。「前の項目」「次の項目」（Alt + ← / →）で同じ文書の項目を順にたどる。項目詳細（S5）の「上位・下位と横並びで見る」から開く。",tracetool/static/views/side.js;tracetool/static/views/items.js,F-65;F-62
+UI-10,画面,S9 横並び表示,"#/documents/{id}/side?item= で開く。「上位 ｜ この文書の項目 ｜ 下位」の 3 列に、項目をカード（ID、状態、生成元、全列の値）で並べる。
+中央の列には文書の全項目を順番どおりに縦に並べ、列内でスクロールする。項目を押すとその項目を選び（URL の item を変える）、左右の列を上位・下位に切り替える。中央の列で選んだときはスクロール位置を変えず、前後の移動・初回表示では選んだ項目を列の中央にスクロールする。項目が多い文書でも重くならないよう、選んだ項目の前後 100 件ずつだけを描画し、「前の項目を表示」「次の項目を表示」で広げる。
+カードの中は列の重要度で 3 段に分ける: 低 = 小さめ（11.5px）で上部、高 = 大きめ（16px・太字）で中央、中 = 中くらい（13.5px）で下部。
+上位・下位のカードの ID を押すと、その項目の文書の横並び表示に切り替える。「前の項目」「次の項目」（Alt + ← / →）で同じ文書の項目を順に選ぶ。上位・下位が複数ある場合は縦に並べ、列ごとにスクロールする。画面の幅が狭くても 3 列を保ち（1 列あたり最小 260px）、収まらない分は横にスクロールする。項目詳細（S5）の「上位・下位と横並びで見る」から開く。",tracetool/static/views/side.js;tracetool/static/views/items.js,F-65;F-62;F-66
 UI-11,画面,確認ダイアログの方針,確認ダイアログは、元に戻せない削除（文書・版・トレース関係）だけに出す。enum への変換、リンクの削除・無効化などは確認せずに実行し、結果を画面右下の通知で知らせる（自動リンクの無効化は「元に戻す」で戻せる）。,tracetool/static/views/schema-editor.js;tracetool/static/views/items.js,N-07
 ERR-01,エラー処理,ログの方針,ログはデータフォルダの logs/ に出力する（1MB × 4 世代）。ログには項目の値を書かない。書くのは操作の種類、文書 ID、件数、エラーの種類まで。,tracetool/__main__.py;tracetool/app.py,C-01
 ERR-02,エラー処理,予期しない例外,例外メッセージ（値を含みうる）は書かず、例外の型と発生場所（ファイル名・行番号・関数名）だけを記録する。応答にも例外の型だけを返す。,tracetool/app.py,C-01

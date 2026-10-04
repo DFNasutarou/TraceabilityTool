@@ -41,6 +41,7 @@ export function newColumn(name = "", sourceHeader = null, type = "string") {
     listEnabled: false, delimText: ";", delimNewline: false, delimTab: false, enumText: "",
     trueText: DEFAULT_TRUE.join("\n"), falseText: DEFAULT_FALSE.join("\n"),
     ref_document_id: "",
+    importance: "mid",
   };
 }
 
@@ -58,6 +59,7 @@ export function toEdit(schema) {
       trueText: (c.bool_values?.true || DEFAULT_TRUE).join("\n"),
       falseText: (c.bool_values?.false || DEFAULT_FALSE).join("\n"),
       ref_document_id: c.ref_document_id || "",
+      importance: c.importance || "mid",
     })),
   };
 }
@@ -74,6 +76,7 @@ export function fromEdit(model) {
       enum_values: c.type === "enum" ? lines(c.enumText) : null,
       bool_values: c.type === "bool" ? { true: lines(c.trueText), false: lines(c.falseText) } : null,
       ref_document_id: c.type === "string" && c.ref_document_id ? Number(c.ref_document_id) : null,
+      importance: c.importance || "mid",
     })),
   };
 }
@@ -233,6 +236,14 @@ export default {
               </select>
             </td>
             <td class="detail-cell">
+              <label v-if="col.type !== 'id'" class="inline" title="横並び表示での表示のしかた（低: 小さく上部 / 高: 大きく中央 / 中: 普通の大きさで下部）">
+                重要度
+                <select v-model="col.importance" @change="changed" class="importance">
+                  <option value="low">低</option>
+                  <option value="mid">中</option>
+                  <option value="high">高</option>
+                </select>
+              </label>
               <label v-if="col.type !== 'id'" class="check">
                 <input type="checkbox" v-model="col.listEnabled" @change="changed"> リスト形式
               </label>
