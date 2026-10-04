@@ -338,3 +338,51 @@ def test_date_cells_are_iso():
     data = make_xlsx({"S": [["ID", "日付"], ["A", dt.datetime(2026, 10, 3)], ["B", dt.datetime(2026, 10, 3, 9, 30)]]})
     grid = readers.read_sheet(readers.open_workbook(data), "S")
     assert grid[1][1] == "2026-10-03" and grid[2][1] == "2026-10-03 09:30:00"
+
+
+# --- テキストの貼り付け・使われている値から enum ------------------------------------
+
+
+def test_import_from_pasted_tsv_and_csv(client):
+    doc = ok(client.post("/api/documents", json={"name": "P"}))["id"]
+    # Excel からコピーした表（タブ区切り、セル内改行は引用符付き）
+    text = 'ID\t名前\r\nP1\t"1行目\n2行目"\r\nP2\tb\r\n'
+    start = ok(client.post("/api/imports/text", json={"document_id": doc, "text": text}))
+    assert start["format"] == "tsv"
+    s = ok(client.put(f"/api/imports/{start['session_id']}/settings", json={"header_row": 1}))
+    assert s["headers"] == ["ID", "名前"] and s["row_count"] == 2
+    v = ok(client.put(f"/api/imports/{start['session_id']}/validate", json={"schema": s["schema"]}))
+    assert v["preview"][0]["data"][s["schema"]["columns"][1]["key"]] == "1行目\n2行目"
+    ok(client.post(f"/api/imports/{start['session_id']}/commit", json={"schema": v["schema"]}))
+
+    start = ok(client.post("/api/imports/text", json={"document_id": doc, "text": "ID,名前\nP3,c\n"}))
+    assert start["format"] == "csv"
+    r = client.post("/api/imports/text", json={"document_id": doc, "text": "   "})
+    assert r.status_code == 400
+
+
+def test_distinct_values_for_enum(client):
+    doc = ok(client.post("/api/documents", json={"name": "E"}))["id"]
+    data = make_csv([["ID", "分類", "タグ"], ["E1", "機能", "a;b"], ["E2", "非機能", "b"], ["E3", "機能", ""]])
+    start = ok(client.post("/api/imports", data={"document_id": doc}, files={"file": ("e.csv", data)}))
+    sid = start["session_id"]
+    s = ok(client.put(f"/api/imports/{sid}/settings", json={"header_row": 1}))
+    cls, tag = s["schema"]["columns"][1], s["schema"]["columns"][2]
+    assert ok(client.put(f"/api/imports/{sid}/distinct", json={"column": cls}))["values"] == ["機能", "非機能"]
+    tag_list = {**tag, "list": {"delimiters": [";"]}}
+    assert ok(client.put(f"/api/imports/{sid}/distinct", json={"column": tag_list}))["values"] == ["a", "b"]
+    v = ok(client.put(f"/api/imports/{sid}/validate", json={"schema": s["schema"]}))
+    ok(client.post(f"/api/imports/{sid}/commit", json={"schema": v["schema"]}))
+
+    # 取り込み後の文書から（最新版の値）
+    assert ok(client.get(f"/api/documents/{doc}/distinct", params={"key": cls["key"]}))["values"] == ["機能", "非機能"]
+    assert client.get(f"/api/documents/{doc}/distinct", params={"key": "nope"}).status_code == 400
+
+
+def test_distinct_values_too_many(client):
+    doc = ok(client.post("/api/documents", json={"name": "M"}))["id"]
+    data = make_csv([["ID", "名前"]] + [[f"M{i}", f"値{i}"] for i in range(colschema.MAX_ENUM_VALUES + 1)])
+    start = ok(client.post("/api/imports", data={"document_id": doc}, files={"file": ("m.csv", data)}))
+    s = ok(client.put(f"/api/imports/{start['session_id']}/settings", json={"header_row": 1}))
+    r = client.put(f"/api/imports/{start['session_id']}/distinct", json={"column": s["schema"]["columns"][1]})
+    assert r.status_code == 400 and "多すぎます" in r.json()["error"]["message"]

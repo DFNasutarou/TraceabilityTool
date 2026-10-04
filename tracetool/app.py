@@ -71,6 +71,16 @@ class ImportSettingsIn(_Body):
     sheets: list[str] = []
 
 
+class ImportTextIn(_Body):
+    document_id: int
+    text: str
+    format: str = "auto"
+
+
+class ColumnIn(_Body):
+    column: dict
+
+
 class ImportSchemaIn(_Body):
     schema_: dict = Field(alias="schema")
     label: str = ""
@@ -186,6 +196,11 @@ def create_app(db: Database, port: int | None = None, extra_hosts: tuple[str, ..
         with db.read() as conn:
             doc_svc.get_document(conn, doc_id)
             return ver_svc.list_versions(conn, doc_id)
+
+    @app.get("/api/documents/{doc_id}/distinct")
+    def distinct_values(doc_id: int, key: str):
+        with db.read() as conn:
+            return items_svc.distinct_values(conn, doc_id, key)
 
     @app.get("/api/documents/{doc_id}/find")
     def find_items(doc_id: int, q: str = ""):
@@ -306,6 +321,18 @@ def create_app(db: Database, port: int | None = None, extra_hosts: tuple[str, ..
         session = sessions.get(sid)
         with db.read() as conn:
             return importer.apply_settings(conn, session, body.encoding or None, body.header_row, body.sheets)
+
+    @app.post("/api/imports/text")
+    def import_start_text(body: ImportTextIn):
+        with db.read() as conn:
+            result = importer.start_text(conn, sessions, body.document_id, body.text, body.format)
+        log.info("import started (text): document=%s format=%s", body.document_id, result["format"])
+        return result
+
+    @app.put("/api/imports/{sid}/distinct")
+    def import_distinct(sid: str, body: ColumnIn):
+        session = sessions.get(sid)
+        return importer.distinct_values(session, body.column)
 
     @app.put("/api/imports/{sid}/validate")
     def import_validate(sid: str, body: ImportSchemaIn):

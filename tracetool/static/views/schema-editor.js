@@ -85,8 +85,11 @@ export default {
     documents: { type: Array, default: () => [] },
     selfId: { type: Number, default: null },
     headers: { type: Array, default: null }, // 取り込み時のみ: ファイルのヘッダ一覧
+    relations: { type: Array, default: () => [] }, // トレース関係の一覧（参照 ID 列の確認に使う）
+    // 列に使われている値を返す関数（col → Promise<string[]>）。指定すると「値から enum を作る」ボタンを出す
+    loadValues: { type: Function, default: null },
   },
-  emits: ["change"],
+  emits: ["change", "create-relation"],
   setup(props, { emit }) {
     const types = Object.entries(TYPE_LABEL);
 
@@ -117,10 +120,48 @@ export default {
       changed();
     }
     const otherDocs = () => props.documents.filter((d) => d.id !== props.selfId);
+    const docName = (id) => props.documents.find((d) => d.id === Number(id))?.name || "";
+    // 参照先との間にトレース関係があるか（参照 ID 列は関係が無いと取り込めない）
+    const hasRelation = (refId) =>
+      props.relations.some(
+        (r) =>
+          (r.upper_doc_id === props.selfId && r.lower_doc_id === Number(refId)) ||
+          (r.lower_doc_id === props.selfId && r.upper_doc_id === Number(refId))
+      );
+    function createRelation(col, refIsUpper) {
+      const ref = Number(col.ref_document_id);
+      emit("create-relation", refIsUpper ? { upper: ref, lower: props.selfId } : { upper: props.selfId, lower: ref });
+    }
+
+    const loadingValues = Vue.ref(null);
+    async function toEnum(col) {
+      loadingValues.value = col.key;
+      try {
+        const values = await props.loadValues(col);
+        if (!values.length) {
+          alert("この列には値がありません。");
+          return;
+        }
+        const msg = `この列で使われている ${values.length} 種類の値を選択肢にして、型を enum にします。\n\n` +
+          values.slice(0, 20).join("、") + (values.length > 20 ? " …" : "");
+        if (!confirm(msg)) return;
+        col.type = "enum";
+        col.ref_document_id = "";
+        col.enumText = values.join("\n");
+        changed();
+      } catch {
+        // エラーは api.js がトースト表示する
+      } finally {
+        loadingValues.value = null;
+      }
+    }
     const headerUsed = (h, col) => props.model.columns.some((c) => c !== col && c.source_header === h);
     const missing = (col) => props.headers && (!col.source_header || !props.headers.includes(col.source_header));
 
-    return { types, add, remove, move, onTypeChange, otherDocs, headerUsed, missing, changed };
+    return {
+      types, add, remove, move, onTypeChange, otherDocs, headerUsed, missing, changed,
+      docName, hasRelation, createRelation, loadingValues, toEnum,
+    };
   },
   template: `
     <div class="schema-editor">
@@ -130,7 +171,7 @@ export default {
             <th style="width:56px">順序</th>
             <th class="col-name">列名</th>
             <th v-if="headers" class="col-src">ファイルの列</th>
-            <th style="width:110px">型</th>
+            <th class="col-type">型</th>
             <th>詳細設定</th>
             <th style="width:60px"></th>
           </tr>
@@ -171,10 +212,23 @@ export default {
                   <option v-for="d in otherDocs()" :key="d.id" :value="d.id">{{ d.name }}</option>
                 </select>
               </label>
+              <div v-if="col.type === 'string' && col.ref_document_id && !hasRelation(col.ref_document_id)" class="relation-warn">
+                <template v-if="selfId">
+                  「{{ docName(col.ref_document_id) }}」との間にトレース関係がありません（関係が無いと取り込めません）。
+                  <button class="btn small primary" @click="createRelation(col, true)">関係を登録（{{ docName(col.ref_document_id) }} を上位にする）</button>
+                  <button class="btn small" @click="createRelation(col, false)">下位にする</button>
+                </template>
+                <template v-else>文書を作成した後、「{{ docName(col.ref_document_id) }}」との間にトレース関係を登録してください。</template>
+              </div>
               <div v-if="col.type === 'enum'" class="stack">
                 <span class="sub">選択肢（1 行に 1 つ）</span>
                 <textarea rows="3" v-model="col.enumText" @input="changed"></textarea>
               </div>
+              <button v-if="loadValues && (col.type === 'string' || col.type === 'enum') && !col.ref_document_id"
+                      class="btn small" :disabled="loadingValues === col.key" @click="toEnum(col)"
+                      title="この列で実際に使われている値だけを選択肢にして、enum に変換します">
+                {{ col.type === 'enum' ? '使われている値で選択肢を作り直す' : '使われている値から enum を作る' }}
+              </button>
               <div v-if="col.type === 'bool'" class="bool-grid">
                 <div><span class="sub">真とみなす文字列</span><textarea rows="3" v-model="col.trueText" @input="changed"></textarea></div>
                 <div><span class="sub">偽とみなす文字列</span><textarea rows="3" v-model="col.falseText" @input="changed"></textarea></div>

@@ -1,0 +1,6 @@
+# 改行コードは LF に統一する（Windows で編集しても CRLF を混ぜない）
+* text=auto eol=lf
+
+# バイナリ
+*.png binary
+*.ico binary

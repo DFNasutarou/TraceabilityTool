@@ -16,8 +16,14 @@ export default {
     const referencedBy = ref([]);
     const saving = ref(false);
 
+    const relations = ref([]);
+    async function loadRelations() {
+      relations.value = (await api.get("/api/relations")).map((r) => r.relation);
+    }
+
     onMounted(async () => {
       documents.value = await api.get("/api/documents");
+      await loadRelations();
       if (props.docId) {
         const d = await api.get(`/api/documents/${props.docId}`);
         name.value = d.name;
@@ -45,6 +51,18 @@ export default {
       }
     }
 
+    // 最新版で使われている値（「使われている値から enum を作る」用）
+    async function loadValues(col) {
+      const r = await api.get(`/api/documents/${props.docId}/distinct`, { key: col.key });
+      return r.values;
+    }
+
+    async function createRelation({ upper, lower }) {
+      await api.post("/api/relations", { upper_doc_id: upper, lower_doc_id: lower });
+      toast("トレース関係を登録しました");
+      await loadRelations();
+    }
+
     async function remove() {
       const refs = referencedBy.value.length
         ? `\n次の文書の参照 ID 列は、参照先が「なし」に変わります: ${referencedBy.value.join("、")}`
@@ -55,7 +73,7 @@ export default {
       navigate("/");
     }
 
-    return { name, description, model, documents, hasVersions, saving, save, remove, href };
+    return { name, description, model, documents, relations, hasVersions, saving, save, remove, loadValues, createRelation, href };
   },
   template: `
     <section class="page">
@@ -78,7 +96,9 @@ export default {
         列が未定義の場合は、取り込み時にファイルのヘッダから列を作ることもできます。
         <template v-if="hasVersions"><br>参照 ID 列の変更は、次回の取り込みからリンクに反映されます。</template>
       </p>
-      <SchemaEditor :model="model" :documents="documents" :self-id="docId" />
+      <SchemaEditor :model="model" :documents="documents" :self-id="docId" :relations="relations"
+                    :load-values="hasVersions ? loadValues : null" @create-relation="createRelation" />
+      <p v-if="hasVersions" class="hint">「使われている値から enum を作る」は、最新版で実際に使われている値を選択肢にします。変更は「保存」を押すと、次回の取り込みから適用されます。</p>
 
       <div v-if="docId" class="danger-zone">
         <button class="btn danger" @click="remove">この文書を削除</button>

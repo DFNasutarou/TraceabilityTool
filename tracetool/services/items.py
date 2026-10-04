@@ -148,6 +148,23 @@ def item_detail(conn: sqlite3.Connection, version_id: int, item_id: str) -> dict
     }
 
 
+def distinct_values(conn: sqlite3.Connection, doc_id: int, key: str) -> dict:
+    """文書の最新版で、列に使われている値の一覧（enum の選択肢を作るため）。"""
+    from ..errors import AppError
+
+    latest = ver_svc.latest_version(conn, doc_id)
+    if latest is None:
+        raise AppError("まだ取り込まれていないため、使われている値がありません")
+    if key not in {c["key"] for c in colschema.columns(latest["schema"])}:
+        raise AppError("この列は最新版にありません（最新版の取り込み後に追加した列です）")
+    values = colschema.distinct_texts((i["data"].get(key) for i in ver_svc.load_items(conn, latest["id"])), None)
+    if len(values) > colschema.MAX_ENUM_VALUES:
+        raise AppError(
+            f"使われている値が {len(values)} 種類あり、enum にするには多すぎます（上限 {colschema.MAX_ENUM_VALUES} 種類）"
+        )
+    return {"values": values, "version_no": latest["version_no"]}
+
+
 def find_items(conn: sqlite3.Connection, doc_id: int, q: str, limit: int = 30) -> list[dict]:
     """リンク追加用に、文書の最新版から ID または表示列で項目を探す。"""
     latest = ver_svc.latest_version(conn, doc_id)

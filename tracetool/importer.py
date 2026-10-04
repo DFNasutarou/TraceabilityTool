@@ -111,7 +111,27 @@ class SessionStore:
 
 def start(conn: sqlite3.Connection, store: SessionStore, doc_id: int, filename: str, data: bytes) -> dict:
     doc_svc.get_document(conn, doc_id)
-    fmt = readers.detect_format(filename)
+    return _start(store, doc_id, filename, readers.detect_format(filename), data)
+
+
+def start_text(conn: sqlite3.Connection, store: SessionStore, doc_id: int, text: str, fmt: str = "auto") -> dict:
+    """貼り付けたテキスト（CSV / TSV）から取り込みを始める。
+
+    fmt が auto の場合、1 行目にタブがあれば TSV、無ければ CSV とみなす
+    （Excel からコピーした表はタブ区切りになる）。
+    """
+    doc_svc.get_document(conn, doc_id)
+    if not text.strip():
+        raise AppError("貼り付けたテキストが空です")
+    if fmt == "auto":
+        fmt = "tsv" if "\t" in text.split("\n", 1)[0] else "csv"
+    if fmt not in ("csv", "tsv"):
+        raise AppError("形式は csv か tsv を指定してください")
+    # 画面では「貼り付けたテキスト（TSV）」のように形式を添えて表示する
+    return _start(store, doc_id, "貼り付けたテキスト", fmt, text.encode("utf-8"))
+
+
+def _start(store: SessionStore, doc_id: int, filename: str, fmt: str, data: bytes) -> dict:
     session = ImportSession(id=secrets.token_urlsafe(16), document_id=doc_id, filename=filename, fmt=fmt, data=data)
     sheets: list[str] = []
     if fmt == "xlsx":
@@ -191,6 +211,27 @@ def propose_schema(schema: dict, headers: list[str]) -> dict:
     return schema
 
 
+def distinct_values(session: ImportSession, column: dict) -> dict:
+    """取り込み中のファイルで、列に使われている値の一覧（enum の選択肢を作るため）。"""
+    if session.table is None:
+        raise AppError("読み込み設定が済んでいません")
+    src = column.get("source_header")
+    if src not in session.table.headers:
+        raise AppError("この列はファイルのどの列にも対応付けられていません")
+    idx = session.table.headers.index(src)
+    delims = (column.get("list") or {}).get("delimiters") if column.get("list") else None
+    values = colschema.distinct_texts((row[idx] for _, _, row in session.table.rows), delims)
+    return _limit_values(values)
+
+
+def _limit_values(values: list[str]) -> dict:
+    if len(values) > colschema.MAX_ENUM_VALUES:
+        raise AppError(
+            f"使われている値が {len(values)} 種類あり、enum にするには多すぎます（上限 {colschema.MAX_ENUM_VALUES} 種類）"
+        )
+    return {"values": values}
+
+
 # --- ステップ 3: 検証 -----------------------------------------------------------
 
 
@@ -254,7 +295,11 @@ def build(conn: sqlite3.Connection, session: ImportSession, schema: dict) -> Bui
             continue
         if rel_svc.relation_between(conn, session.document_id, ref) is None:
             ref_name = doc_svc.get_document(conn, ref)["name"]
-            errors.add(f"参照先文書「{ref_name}」との間にトレース関係がありません。先に関係を登録してください", column=col["name"])
+            errors.add(
+                f"参照先文書「{ref_name}」との間にトレース関係がありません。"
+                "上の列の設定に表示される「関係を登録」ボタン、または文書一覧の下部「トレース関係」で登録してください",
+                column=col["name"],
+            )
         hashes = ver_svc.latest_hashes(conn, ref)
         if not hashes:
             warnings.add("参照先文書がまだ取り込まれていないため、参照先の存在は確認できません", column=col["name"])

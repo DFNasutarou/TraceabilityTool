@@ -175,6 +175,30 @@ def normalize_cell(col: dict, raw: str | None) -> tuple[Any, bool]:
     return _convert_scalar(col, text)
 
 
+MAX_ENUM_VALUES = 300
+
+
+def distinct_texts(values, delimiters: list[str] | None) -> list[str]:
+    """セルの値（文字列・リスト・その他）から、使われている値を出現順に重複なく集める。
+
+    delimiters を指定すると、文字列をリスト形式として分割してから集める。
+    enum の選択肢を作るために使う。
+    """
+    seen: dict[str, None] = {}
+    for v in values:
+        if v is None:
+            continue
+        parts = v if isinstance(v, list) else [v]
+        for p in parts:
+            text = as_text(p).strip() if not isinstance(p, str) else p.strip()
+            if not text:
+                continue
+            pieces = split_list(text, delimiters) if delimiters and isinstance(p, str) else [text]
+            for piece in pieces:
+                seen.setdefault(piece, None)
+    return list(seen)
+
+
 def content_hash(data: dict) -> str:
     """全列の値からハッシュを作る。値が null の列は除く（空の列の追加でハッシュが変わらないように）。"""
     payload = {k: v for k, v in data.items() if v is not None}

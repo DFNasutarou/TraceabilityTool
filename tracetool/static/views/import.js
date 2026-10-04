@@ -14,8 +14,12 @@ export default {
     const busy = ref(false);
 
     // ステップ 1
+    const source = ref("file"); // file: ファイルを選ぶ / text: テキストを貼り付ける
     const fileInput = ref(null);
+    const pasteText = ref("");
+    const pasteFormat = ref("auto");
     const start = ref(null);
+    const relations = ref([]);
     // ステップ 2
     const encoding = ref("");
     const headerRow = ref(1);
@@ -29,10 +33,15 @@ export default {
     const label = ref("");
     const tab = ref("errors");
 
+    async function loadRelations() {
+      relations.value = (await api.get("/api/relations")).map((r) => r.relation);
+    }
+
     onMounted(async () => {
       [doc.value, documents.value] = await Promise.all([
         api.get(`/api/documents/${props.docId}`),
         api.get("/api/documents"),
+        loadRelations(),
       ]);
     });
 
@@ -49,15 +58,23 @@ export default {
     });
 
     async function upload() {
-      const f = fileInput.value?.files?.[0];
-      if (!f) return;
       busy.value = true;
       try {
-        await cancelSession();
-        const fd = new FormData();
-        fd.append("document_id", props.docId);
-        fd.append("file", f);
-        start.value = await api.post("/api/imports", fd);
+        if (source.value === "file") {
+          const f = fileInput.value?.files?.[0];
+          if (!f) return;
+          await cancelSession();
+          const fd = new FormData();
+          fd.append("document_id", props.docId);
+          fd.append("file", f);
+          start.value = await api.post("/api/imports", fd);
+        } else {
+          if (!pasteText.value.trim()) return;
+          await cancelSession();
+          start.value = await api.post("/api/imports/text", {
+            document_id: props.docId, text: pasteText.value, format: pasteFormat.value,
+          });
+        }
         model.value = toEdit(null); // 別のファイルを選び直したら、定義の案を作り直す
         encoding.value = "";
         headerRow.value = 1;
@@ -142,6 +159,20 @@ export default {
       }
     }
 
+    // 取り込み中のファイルで、列に使われている値（「使われている値から enum を作る」用）
+    async function loadValues(col) {
+      const column = fromEdit({ columns: [col] }).columns[0];
+      const r = await api.put(`/api/imports/${start.value.session_id}/distinct`, { column });
+      return r.values;
+    }
+
+    async function createRelation({ upper, lower }) {
+      await api.post("/api/relations", { upper_doc_id: upper, lower_doc_id: lower });
+      toast("トレース関係を登録しました");
+      await loadRelations();
+      onSchemaChange();
+    }
+
     async function commit() {
       busy.value = true;
       try {
@@ -164,9 +195,9 @@ export default {
     const maxCols = computed(() => Math.max(0, ...preview.value.map((r) => r.length)));
 
     return {
-      doc, documents, step, busy, fileInput, start, encoding, headerRow, sheets, preview, settings, model,
+      doc, documents, relations, step, busy, source, fileInput, pasteText, pasteFormat, start, encoding, headerRow, sheets, preview, settings, model,
       validation, dirty, label, tab, unmapped, previewCols, canCommit, maxCols,
-      upload, applySettings, toStep3, addColumnFor, addAllUnmapped, onSchemaChange, validate, commit, cancel,
+      upload, applySettings, loadValues, createRelation, toStep3, addColumnFor, addAllUnmapped, onSchemaChange, validate, commit, cancel,
       href, fmtValue,
     };
   },
@@ -185,18 +216,38 @@ export default {
 
       <!-- ステップ 1 -->
       <div v-if="step === 1" class="card">
-        <p>CSV / TSV / Excel（.xlsx）ファイルを選択してください。ファイルはこの PC 内のツールにだけ送られ、元ファイルは保存されません。</p>
-        <div class="inline-form">
-          <input type="file" ref="fileInput" accept=".csv,.tsv,.txt,.xlsx,.xlsm">
-          <button class="btn primary" :disabled="busy" @click="upload">読み込む</button>
+        <div class="source-tabs">
+          <button :class="{active: source === 'file'}" @click="source = 'file'">ファイルを選ぶ</button>
+          <button :class="{active: source === 'text'}" @click="source = 'text'">テキストを貼り付ける</button>
         </div>
+        <template v-if="source === 'file'">
+          <p>CSV / TSV / Excel（.xlsx）ファイルを選択してください。ファイルはこの PC 内のツールにだけ送られ、元ファイルは保存されません。</p>
+          <div class="inline-form">
+            <input type="file" ref="fileInput" accept=".csv,.tsv,.txt,.xlsx,.xlsm">
+            <button class="btn primary" :disabled="busy" @click="upload">読み込む</button>
+          </div>
+        </template>
+        <template v-else>
+          <p>CSV / TSV のテキストを貼り付けてください。Excel で表の範囲（見出しの行を含む）をコピーして貼り付けることもできます（タブ区切りとして読み込みます）。</p>
+          <textarea class="paste-area" v-model="pasteText" placeholder="要件ID&#9;要件名&#10;REQ-001&#9;ログインできる"></textarea>
+          <div class="inline-form">
+            <label>形式
+              <select v-model="pasteFormat">
+                <option value="auto">自動判定（1 行目にタブがあれば TSV）</option>
+                <option value="tsv">TSV（タブ区切り）</option>
+                <option value="csv">CSV（カンマ区切り）</option>
+              </select>
+            </label>
+            <button class="btn primary" :disabled="busy || !pasteText.trim()" @click="upload">読み込む</button>
+          </div>
+        </template>
       </div>
 
       <!-- ステップ 2 -->
       <div v-if="step === 2" class="card">
         <div class="inline-form">
           <span><b>{{ start.filename }}</b>（{{ start.format.toUpperCase() }}）</span>
-          <label v-if="start.format !== 'xlsx'">文字コード
+          <label v-if="start.format !== 'xlsx' && !start.filename.startsWith('貼り付けた')">文字コード
             <select v-model="encoding" @change="applySettings">
               <option value="">自動判定（{{ settings?.encoding || start.encoding }}）</option>
               <option value="utf-8-sig">UTF-8</option>
@@ -233,7 +284,9 @@ export default {
             ファイルの {{ settings.row_count }} 行を読み込みました。各列が「ファイルのどの列」から値を取るかを確認してください。
             この列構成は、この文書の次回以降の取り込みにも引き継がれます。
           </p>
-          <SchemaEditor :model="model" :documents="documents" :self-id="docId" :headers="settings.headers" @change="onSchemaChange" />
+          <SchemaEditor :model="model" :documents="documents" :self-id="docId" :headers="settings.headers"
+                        :relations="relations" :load-values="loadValues"
+                        @change="onSchemaChange" @create-relation="createRelation" />
           <div v-if="unmapped.length" class="unmapped">
             <span>どの列にも対応付けられていないファイルの列:</span>
             <button v-for="h in unmapped" :key="h" class="chip" @click="addColumnFor(h)" title="列として追加">＋ {{ h }}</button>
