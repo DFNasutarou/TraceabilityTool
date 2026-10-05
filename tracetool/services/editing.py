@@ -26,21 +26,28 @@ MODES = ("new", "overwrite")
 MAX_ERRORS_SHOWN = 10
 
 
-def _merge_working_schema(working: dict, edited: dict) -> dict:
+def _merge_working_schema(working: dict, base: dict, edited: dict) -> dict:
     """文書の作業中のカラム定義に、編集で足した列と enum の選択肢を加える。
 
-    作業中の定義は、最新版の取り込み後に文書の設定画面で変えられていることがあるため、置き換えずに足すだけにする。
+    「編集で足した」は、編集を始めた版（base）のカラム定義との差で判断する。
+    作業中の定義は、最新版の取り込み後に文書の設定画面で変えられていることがあるため置き換えない
+    （設定画面で消した列・選択肢を、編集の保存で復活させない）。
     """
     if not colschema.columns(working):
         return edited
     merged = json.loads(json.dumps(working))
     by_key = {c["key"]: c for c in merged["columns"]}
+    base_by_key = {c["key"]: c for c in colschema.columns(base)}
     for col in colschema.columns(edited):
+        b = base_by_key.get(col["key"])
         w = by_key.get(col["key"])
-        if w is None:
-            merged["columns"].append(col)
-        elif w["type"] == "enum" and col["type"] == "enum":
-            w["enum_values"] = list(dict.fromkeys((w.get("enum_values") or []) + (col.get("enum_values") or [])))
+        if b is None:
+            if w is None:
+                merged["columns"].append(col)
+            continue
+        if w is not None and w["type"] == "enum" and col["type"] == "enum":
+            added = [v for v in (col.get("enum_values") or []) if v not in (b.get("enum_values") or [])]
+            w["enum_values"] = list(dict.fromkeys((w.get("enum_values") or []) + added))
     return merged
 
 
@@ -62,6 +69,8 @@ def build_items(conn: sqlite3.Connection, doc_id: int, schema: dict, rows: list[
     items: list[dict] = []
     for n, row in enumerate(rows, start=1):
         raw: dict[str, Any] = row.get("data") or {}
+        if not isinstance(raw, dict):
+            raise AppError(f"{n} 行目の data が不正です")
         data: dict[str, Any] = {}
         invalid: list[str] = []
         for col in cols:
@@ -123,17 +132,37 @@ def rename_impact(conn: sqlite3.Connection, doc_id: int, renames: dict[str, str]
     return renaming.impact(conn, doc_id, renames)
 
 
+def version_stamp(version: dict) -> str:
+    """版の内容が変わったかを見分ける印。書き換え（overwrite）では版 ID が変わらないため、書き換えの回数（revision）も含める。"""
+    s = version["import_settings"]
+    return f'{version["id"]}:{s.get("revision", 0)}'
+
+
 def save(
-    conn: sqlite3.Connection, doc_id: int, base_version_id: int, mode: str, schema: dict, rows: list[dict], label: str = ""
+    conn: sqlite3.Connection,
+    doc_id: int,
+    base_version_id: int,
+    mode: str,
+    schema: dict,
+    rows: list[dict],
+    label: str = "",
+    base_stamp: str | None = None,
 ) -> dict:
-    """編集結果を保存し、{"version_id", "version_no", "mode"} を返す。conn はトランザクション内で渡すこと。"""
+    """編集結果を保存し、{"version_id", "version_no", "mode"} を返す。conn はトランザクション内で渡すこと。
+
+    base_stamp: 編集を始めたときの version_stamp。指定すると、その後に同じ版が書き換えられていないかも確かめる。
+    """
     if mode not in MODES:
         raise AppError("保存のしかた（mode）は new か overwrite を指定してください")
     doc = doc_svc.get_document(conn, doc_id)
     latest = ver_svc.latest_version(conn, doc_id)
-    if latest is None or latest["id"] != base_version_id:
+    if (
+        latest is None
+        or latest["id"] != base_version_id
+        or (base_stamp is not None and version_stamp(latest) != base_stamp)
+    ):
         raise AppError(
-            "編集を始めた後に、この文書の版が変わりました（取り込み・版の削除など）。編集を取り消して、最新版から編集し直してください",
+            "編集を始めた後に、この文書の版が変わりました（取り込み・版の削除・別の画面での編集など）。編集を取り消して、最新版から編集し直してください",
             code="version_conflict",
         )
     schema = doc_svc.check_schema(conn, doc_id, schema)
@@ -158,16 +187,17 @@ def save(
     else:
         version_id = latest["id"]
         # 元の取り込みの設定は残し、編集した日時を足す
-        settings = {**latest["import_settings"], "edited_at": settings["edited_at"]}
+        revision = latest["import_settings"].get("revision", 0) + 1
+        settings = {**latest["import_settings"], "edited_at": settings["edited_at"], "revision": revision}
         ver_svc.replace_items(conn, version_id, schema, items, settings)
         if label:
             conn.execute("UPDATE versions SET label = ? WHERE id = ?", (label, version_id))
-    merged = _merge_working_schema(doc["schema"], schema)
+    merged = _merge_working_schema(doc["schema"], latest["schema"], schema)
     conn.execute("UPDATE documents SET schema_json = ? WHERE id = ?", (json.dumps(merged, ensure_ascii=False), doc_id))
     referring: list[int] = []
     if renames:
         renaming.rename_links(conn, doc_id, renames, acks)
-        referring = renaming.rename_references(conn, doc_id, renames)
+        referring = renaming.rename_references(conn, doc_id, renames, {it["item_id"] for it in items})
     link_svc.regenerate_auto_links(conn, doc_id)
     for other in referring:
         link_svc.regenerate_auto_links(conn, other)

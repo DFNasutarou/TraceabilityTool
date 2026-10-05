@@ -229,3 +229,135 @@ def test_rename_rejects_existing_id(client):
         del rows[2]
 
     assert edit_with_orig(client, req, base, reuse_deleted).status_code == 400
+
+
+# --- レビューの指摘への対応 ----------------------------------------------------------
+
+
+def test_rename_keeps_downstream_links_confirmed(client):
+    """要件 → 画面 → テストの 3 段で要件の ID を変えても、画面 → テストのリンクは要確認にならない。"""
+    from .conftest import make_csv
+
+    req, scr, rel = setup(client)
+    do_import(client, req, "req.csv", req_csv())
+    do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)
+    tst = ok(client.post("/api/documents", json={"name": "テスト仕様書", "schema": {"columns": [
+        {"key": "tid", "name": "テストID", "type": "id"},
+        {"key": "tref", "name": "対象画面", "type": "string", "ref_document_id": scr},
+    ]}}))["id"]
+    rel2 = ok(client.post("/api/relations", json={"upper_doc_id": scr, "lower_doc_id": tst}))["id"]
+    do_import(client, tst, "tst.csv", make_csv([["テストID", "対象画面"], ["T-1", "SCR-01"], ["T-2", "SCR-02"]]))
+    assert ok(client.get(f"/api/trace/{rel2}"))["suspect"] == []
+
+    base = latest(client, req)
+
+    def mutate(rows):
+        rows[1]["data"]["rid"] = "REQ-020"
+
+    ok(edit_with_orig(client, req, base, mutate))
+    assert ok(client.get(f"/api/trace/{rel2}"))["suspect"] == []
+    assert ok(client.get(f"/api/trace/{rel}"))["suspect"] == []
+
+
+def test_rename_clears_reference_warning(client):
+    req, scr, rel = setup(client)
+    do_import(client, req, "req.csv", req_csv())
+    do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)  # SCR-04 → REQ-999（存在しない）
+    before = {i["item_id"]: i for i in latest(client, scr)["items"]}
+    ref_key = before["SCR-04"]["invalid"][0]
+    base = latest(client, req)
+
+    def mutate(rows):
+        rows[2]["data"]["rid"] = "REQ-999"  # REQ-003 を REQ-999 に
+
+    ok(edit_with_orig(client, req, base, mutate))
+    after = {i["item_id"]: i for i in latest(client, scr)["items"]}
+    assert after["SCR-04"]["invalid"] == []  # 参照先が存在するようになった
+    assert after["SCR-04"]["data"][ref_key] == "REQ-999" or after["SCR-04"]["data"][ref_key] == ["REQ-999"]
+
+
+def test_edit_does_not_restore_removed_columns_or_choices(client):
+    req, scr, rel = setup(client)
+    do_import(client, req, "req.csv", req_csv())
+    base = latest(client, req)
+    # 取り込み後に、設定画面で「備考」列を消し、選択肢「低」を外す
+    d = ok(client.get(f"/api/documents/{req}"))
+    d["schema"]["columns"] = [c for c in d["schema"]["columns"] if c["key"] != "rnote"]
+    for c in d["schema"]["columns"]:
+        if c["key"] == "rpri":
+            c["enum_values"] = ["高", "中"]
+    ok(client.put(f"/api/documents/{req}", json={"name": d["name"], "schema": d["schema"]}))
+
+    def mutate(schema, rows):
+        rows[0]["data"]["rname"] = "ログイン（改）"
+        schema["columns"][2]["enum_values"].append("緊急")  # 編集で足した選択肢は加わる
+
+    ok(edit(client, req, base, "new", mutate))
+    working = ok(client.get(f"/api/documents/{req}"))["schema"]
+    assert "rnote" not in [c["key"] for c in working["columns"]]
+    assert [c for c in working["columns"] if c["key"] == "rpri"][0]["enum_values"] == ["高", "中", "緊急"]
+
+
+def test_overwrite_conflict_on_same_version(client):
+    req, scr, rel = setup(client)
+    do_import(client, req, "req.csv", req_csv())
+    base = latest(client, req)  # 2 つの画面で同じ版の編集を始めた
+
+    def body(name):
+        rows = [{"orig_id": i["item_id"], "data": dict(i["data"])} for i in base["items"]]
+        rows[0]["data"]["rname"] = name
+        return {"base_version_id": base["version_id"], "base_stamp": base["stamp"], "mode": "overwrite",
+                "schema": base["schema"], "items": rows}
+
+    ok(client.post(f"/api/documents/{req}/edit", json=body("A")))
+    r = client.post(f"/api/documents/{req}/edit", json=body("B"))
+    assert r.status_code == 400 and r.json()["error"]["code"] == "version_conflict"
+    assert latest(client, req)["items"][0]["data"]["rname"] == "A"
+
+
+def test_edit_rejects_malformed_rows(client):
+    req, scr, rel = setup(client)
+    do_import(client, req, "req.csv", req_csv())
+    base = latest(client, req)
+    r = client.post(f"/api/documents/{req}/edit", json={
+        "base_version_id": base["version_id"], "mode": "new", "schema": base["schema"], "items": [{"data": "x"}],
+    })
+    assert r.status_code == 422
+
+
+def test_rename_merge_prefers_confirmed_ack(client):
+    """付け替え先に古い確認ハッシュのリンクがあっても、確認済みのリンクは要確認にしない。"""
+    req, scr, rel = setup(client)
+    do_import(client, req, "req.csv", req_csv())
+    do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)  # SCR-04 → REQ-999 はリンク切れ
+    # SCR-04 の内容を変えて、リンク切れのリンクの下位側の確認ハッシュを古くする
+    base_scr = latest(client, scr)
+
+    def change_scr(schema, rows):
+        rows[3]["data"]["sname"] = "謎画面（改）"
+
+    ok(edit(client, scr, base_scr, "overwrite", change_scr))
+    # REQ-003 の手動リンクを SCR-04 に張って確認済みにし、REQ-003 → REQ-999 に付け直す（リンク切れと重なる）
+    lid = ok(client.post("/api/links", json={"relation_id": rel, "upper_item_id": "REQ-003", "lower_item_id": "SCR-04"}))["id"]
+    assert lid
+    base = latest(client, req)
+
+    def mutate(rows):
+        rows[2]["data"]["rid"] = "REQ-999"
+
+    ok(edit_with_orig(client, req, base, mutate))
+    ev = ok(client.get(f"/api/trace/{rel}"))
+    assert not any(l["upper_item_id"] == "REQ-999" for l in ev["suspect"])
+    assert len([l for l in ev["links"] if l["upper_item_id"] == "REQ-999"]) == 1
+
+
+def test_unmapped_headers_ignore_auto_id_source(client):
+    from .conftest import make_csv
+
+    doc = ok(client.post("/api/documents", json={"name": "文書", "schema": {"columns": [
+        {"key": "a", "name": "ID", "type": "id", "source_header": "名前", "auto_id": {"prefix": "X-"}},
+        {"key": "b", "name": "備考", "type": "string", "source_header": "備考"},
+    ]}}))["id"]
+    s = ok(client.post("/api/imports", data={"document_id": doc}, files={"file": ("a.csv", make_csv([["名前", "備考"], ["x", "y"]]))}))
+    r = ok(client.put(f"/api/imports/{s['session_id']}/settings", json={"header_row": 1}))
+    assert r["unmapped_headers"] == ["名前"]

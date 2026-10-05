@@ -245,6 +245,7 @@ export default {
       if (id) r.data[idCol.value.key] = id;
       rows.value.push(r);
       q.value = "";
+      await nextTick(); // 検索語を消したことで 1 ページ目に戻る処理の後に、最後のページへ移る
       page.value = pages.value;
       active.value = { uid: r.uid, key: idCol.value.key };
       await nextTick();
@@ -287,18 +288,29 @@ export default {
     // --- 保存 ---
     const saveForm = reactive({ open: false, mode: "new", label: "" });
     const impact = ref(null); // ID を付け直すと変わるもの
-    async function openSave() {
+    const impactFailed = ref(false);
+    async function loadImpact() {
       impact.value = null;
-      saveForm.open = true;
-      if (stats.value.renamed) {
+      impactFailed.value = false;
+      try {
         impact.value = await api.post(`/api/documents/${props.docId}/rename-impact`, { renames: renames.value });
+      } catch {
+        impactFailed.value = true; // 付け直す範囲を確かめられないまま保存させない
       }
     }
+    async function openSave() {
+      impact.value = null;
+      impactFailed.value = false;
+      saveForm.open = true;
+      if (stats.value.renamed) await loadImpact();
+    }
+    const canSave = computed(() => !saving.value && (!stats.value.renamed || !!impact.value));
     async function save() {
       saving.value = true;
       try {
         const r = await api.post(`/api/documents/${props.docId}/edit`, {
           base_version_id: base.value.version_id,
+          base_stamp: base.value.stamp,
           mode: saveForm.mode,
           schema: schema.value,
           items: rows.value.filter((x) => !x.deleted).map((x) => ({ orig_id: x.orig?.item_id ?? null, data: x.data })),
@@ -332,7 +344,7 @@ export default {
     });
 
     return {
-      base, schema, rows, columns, idCol, active, renames, badRenames, impact, openSave, page, pages, q, visible, filtered, saving, stats, dirty, dupIds, addedCols,
+      base, schema, rows, columns, idCol, active, renames, badRenames, impact, impactFailed, loadImpact, canSave, openSave, page, pages, q, visible, filtered, saving, stats, dirty, dupIds, addedCols,
       isChanged, activate, isActive, addRow, toggleDelete, colForm, addColumn, removeAddedColumn, addChoice,
       saveForm, save, cancel, idOf, widthStyle, TYPE_LABEL,
     };
@@ -389,7 +401,10 @@ export default {
             <ul class="rename-list">
               <li v-for="(n, o) in renames" :key="o"><span class="idcell">{{ o }}</span> → <span class="idcell">{{ n }}</span></li>
             </ul>
-            <p v-if="!impact" class="sub">付け直す対象を調べています…</p>
+            <p v-if="impactFailed" class="err-text small">
+              付け直す対象を調べられませんでした。<button class="btn small" @click="loadImpact">もう一度調べる</button>
+            </p>
+            <p v-else-if="!impact" class="sub">付け直す対象を調べています…</p>
             <template v-else>
               <p>保存すると、次も新しい ID に付け直します。</p>
               <ul>
@@ -416,7 +431,7 @@ export default {
           <p class="sub">内容を変えた項目へのリンクは、相手側で「要確認」になります。</p>
           <div class="actions end">
             <button class="btn" @click="saveForm.open = false">戻る</button>
-            <button class="btn primary" :disabled="saving" @click="save">保存する</button>
+            <button class="btn primary" :disabled="!canSave" @click="save">保存する</button>
           </div>
         </div>
       </div>

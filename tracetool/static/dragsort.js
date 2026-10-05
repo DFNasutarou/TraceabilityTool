@@ -19,10 +19,15 @@ export function dragSort(onMove) {
     state,
     arm(i) {
       state.armed = i;
+      // つまみを押したまま行の外で離した場合も、行をドラッグできる状態のまま残さない
+      document.addEventListener("mouseup", () => {
+        if (state.from === null) state.armed = null;
+      }, { once: true });
     },
     start(i, e) {
       if (state.armed !== i) {
-        e.preventDefault();
+        // 内側の並べ替え（列の中の enum の選択肢など）から伝わってきたドラッグは取り消さない
+        if (e.target === e.currentTarget) e.preventDefault();
         return;
       }
       state.from = i;

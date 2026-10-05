@@ -106,11 +106,16 @@ def rename_links(conn: sqlite3.Connection, doc_id: int, renames: dict[str, str],
                 (rel["id"], r["upper_item_id"], r["lower_item_id"]),
             ).fetchone()
             if dup is not None:
+                # 確認ハッシュは、付け替えた側（元のリンク）の値を優先する（付け替え先は主にリンク切れで、確認の基準を持たない）
                 merged = {f: int(bool(dup[f] or r[f])) for f in _LINK_FLAGS}
                 conn.execute(
-                    "UPDATE links SET manual = ?, auto_by_upper = ?, auto_by_lower = ?, auto_disabled = ? WHERE id = ?",
+                    "UPDATE links SET manual = ?, auto_by_upper = ?, auto_by_lower = ?, auto_disabled = ?, "
+                    "upper_hash_ack = ?, lower_hash_ack = ? WHERE id = ?",
                     (merged["manual"], merged["auto_by_upper"], merged["auto_by_lower"],
-                     int(bool(dup["auto_disabled"] and r["auto_disabled"])), dup["id"]),
+                     int(bool(dup["auto_disabled"] and r["auto_disabled"])),
+                     r["upper_hash_ack"] if r["upper_hash_ack"] is not None else dup["upper_hash_ack"],
+                     r["lower_hash_ack"] if r["lower_hash_ack"] is not None else dup["lower_hash_ack"],
+                     dup["id"]),
                 )
                 continue
             cols = list(r)
@@ -119,34 +124,63 @@ def rename_links(conn: sqlite3.Connection, doc_id: int, renames: dict[str, str],
             )
 
 
-def rename_references(conn: sqlite3.Connection, doc_id: int, renames: dict[str, str]) -> list[int]:
-    """この文書を参照している文書の最新版で、参照 ID 列の古い ID を新しい ID に書き換える。書き換えた文書 ID を返す。"""
+def rename_references(
+    conn: sqlite3.Connection, doc_id: int, renames: dict[str, str], valid_ids: set[str]
+) -> list[int]:
+    """この文書を参照している文書の最新版で、参照 ID 列の古い ID を新しい ID に書き換える。書き換えた文書 ID を返す。
+
+    valid_ids: 保存後のこの文書の項目 ID。付け直した列と、新しい ID を元から参照していた列で、
+    参照先がすべてそろえば、その列の警告（参照先に無い ID）を外す。
+    """
     changed_docs = []
     for d, latest, cols in _referring(conn, doc_id):
-        rel = rel_svc.relation_between(conn, doc_id, d["id"])
-        side = None if rel is None else ("upper" if rel["upper_doc_id"] == d["id"] else "lower")
+        # 書き換えた項目はハッシュが変わるため、その文書が持つすべての関係で確認ハッシュを付け替える
+        # （編集した文書との関係だけでなく、例えば下位文書とのリンクも、参照 ID を直しただけで要確認にしない）
+        sides = [(rel["id"], "upper" if rel["upper_doc_id"] == d["id"] else "lower") for rel in rel_svc.relations_of(conn, d["id"])]
         changed = 0
         for item in ver_svc.load_items(conn, latest["id"]):
             data = dict(item["data"])
+            touched = []
             for c in cols:
                 if c["key"] in data:
-                    data[c["key"]] = _map_ref(data[c["key"]], renames)
-            if data == item["data"]:
+                    mapped = _map_ref(data[c["key"]], renames)
+                    if mapped != data[c["key"]]:
+                        data[c["key"]] = mapped
+                        touched.append(c["key"])
+            # 警告（参照先に無い ID）を見直す列: 書き換えた列と、新しい ID を元から参照していた列
+            new_ids = set(renames.values())
+            recheck = set(touched) | {
+                c["key"] for c in cols if c["key"] in item["invalid"] and new_ids & set(colschema.ref_values(data.get(c["key"])))
+            }
+            invalid = [
+                k for k in item["invalid"]
+                if not (k in recheck and all(r in valid_ids for r in colschema.ref_values(data[k])))
+            ]
+            if not touched:
+                # 値は変わらないので、ハッシュ・リンクはそのまま。警告だけを外す
+                if invalid != item["invalid"]:
+                    conn.execute(
+                        "UPDATE items SET invalid_json = ? WHERE version_id = ? AND item_id = ?",
+                        (json.dumps(invalid), latest["id"], item["item_id"]),
+                    )
+                    changed += 1
                 continue
             new_hash = colschema.content_hash(data)
             conn.execute(
-                "UPDATE items SET data_json = ?, content_hash = ? WHERE version_id = ? AND item_id = ?",
-                (json.dumps(data, ensure_ascii=False), new_hash, latest["id"], item["item_id"]),
+                "UPDATE items SET data_json = ?, invalid_json = ?, content_hash = ? WHERE version_id = ? AND item_id = ?",
+                (json.dumps(data, ensure_ascii=False), json.dumps(invalid), new_hash, latest["id"], item["item_id"]),
             )
             # 参照 ID を付け直しただけなので、確認済みだったリンクは確認済みのままにする
-            if side is not None:
+            for rel_id, side in sides:
                 conn.execute(
                     f"UPDATE links SET {side}_hash_ack = ? WHERE relation_id = ? AND {side}_item_id = ? AND {side}_hash_ack = ?",
-                    (new_hash, rel["id"], item["item_id"], item["hash"]),
+                    (new_hash, rel_id, item["item_id"], item["hash"]),
                 )
             changed += 1
         if changed:
-            settings = {**latest["import_settings"], "ids_renamed_at": now_iso()}
+            # 版の書き換えとして数える（この文書を編集中の画面が、古い内容で上書きしないように）
+            revision = latest["import_settings"].get("revision", 0) + 1
+            settings = {**latest["import_settings"], "ids_renamed_at": now_iso(), "revision": revision}
             conn.execute(
                 "UPDATE versions SET import_settings = ? WHERE id = ?", (json.dumps(settings, ensure_ascii=False), latest["id"])
             )

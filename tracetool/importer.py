@@ -219,7 +219,7 @@ def apply_settings(
 
     doc = doc_svc.get_document(conn, session.document_id)
     schema = propose_schema(doc["schema"], session.table.headers)
-    used = {c.get("source_header") for c in schema["columns"]}
+    used = {c.get("source_header") for c in schema["columns"] if not (c["type"] == "id" and c.get("auto_id"))}
     return {
         "encoding": session.encoding,
         "headers": session.table.headers,

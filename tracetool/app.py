@@ -96,11 +96,17 @@ class ImportTextIn(_Body):
     format: str = "auto"
 
 
+class EditRowIn(_Body):
+    orig_id: str | None = None  # 編集を始めたときの ID（追加した行は None）
+    data: dict
+
+
 class EditIn(_Body):
     base_version_id: int
+    base_stamp: str | None = None  # 編集を始めたときの版の印（同じ版の書き換えとの衝突を見分ける）
     mode: str  # new: 新しい版として保存 / overwrite: 最新版を書き換える
     schema_: dict = Field(alias="schema")
-    items: list[dict]
+    items: list[EditRowIn]
     label: str = ""
 
 
@@ -247,7 +253,10 @@ def create_app(db: Database, port: int | None = None, extra_hosts: tuple[str, ..
     @app.post("/api/documents/{doc_id}/edit")
     def save_edit(doc_id: int, body: EditIn):
         with db.tx() as conn:
-            result = edit_svc.save(conn, doc_id, body.base_version_id, body.mode, body.schema_, body.items, body.label)
+            result = edit_svc.save(
+                conn, doc_id, body.base_version_id, body.mode, body.schema_,
+                [r.model_dump() for r in body.items], body.label, body.base_stamp,
+            )
         log.info("items edited: document=%s version=%s mode=%s", doc_id, result["version_id"], body.mode)
         return result
 

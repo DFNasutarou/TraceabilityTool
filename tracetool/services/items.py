@@ -202,6 +202,12 @@ def display_schema(conn: sqlite3.Connection, doc_id: int, schema: dict) -> dict:
     return {**schema, "columns": cols}
 
 
+def edit_stamp(version: dict) -> str:
+    from .editing import version_stamp
+
+    return version_stamp(version)
+
+
 def latest_items(conn: sqlite3.Connection, doc_id: int) -> dict:
     """横並び表示の「この項目」の列用: 文書の最新版の全項目（取り込み順）と表示用のカラム定義。"""
     from ..errors import AppError
@@ -212,6 +218,7 @@ def latest_items(conn: sqlite3.Connection, doc_id: int) -> dict:
     return {
         "version_id": latest["id"],
         "version_no": latest["version_no"],
+        "stamp": edit_stamp(latest),
         "schema": display_schema(conn, doc_id, latest["schema"]),
         "items": [
             {"item_id": i["item_id"], "data": i["data"], "invalid": i["invalid"]}
