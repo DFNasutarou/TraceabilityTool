@@ -153,12 +153,18 @@ PRC-27,処理,ID の自動採番,"ID 列に auto_id があれば、ファイル�
 取り込むたびに振り直すため、行の挿入・削除で ID がずれることを画面で注意する。編集モードで行を足すときは、同じ接頭辞の ID の最大の番号 + 1 を初期値にする。",tracetool/colschema.py;tracetool/importer.py;tracetool/static/views/schema-editor.js;tracetool/static/views/item-editor.js,F-23
 PRC-28,処理,編集の保存,"POST /api/documents/{id}/edit で、最新版を元に編集した全行とカラム定義を受け取り、1 トランザクションで保存する。
 1. 編集を始めた版（base_version_id）が今も最新版であることを確認する（違えばエラー。取り込み直しなどとの衝突を防ぐ）。
-2. カラム定義を検証し、各セルを列の型に合わせて正規化する（bool の真偽値・番号の数値・リストの配列はそのまま受け取り、文字列は取り込みと同じ規則で変換する）。ID の空欄・重複はエラー、型に合わない値・参照先に無い ID は警告のセルとして保存する。
+2. カラム定義を検証し、各セルを列の型に合わせて正規化する（bool の真偽値・番号の数値・リストの配列はそのまま受け取り、文字列は取り込みと同じ規則で変換する）。各行は編集を始めたときの ID（orig_id。追加した行は null）を持つ。ID の空欄・重複はエラー、型に合わない値・参照先に無い ID は警告のセルとして保存する。
 3. new: 新しい版を作る（元ファイル名は「（画面で編集）」）。overwrite: 最新版の項目とカラム定義を置き換え、版のキャッシュを捨てる。
 4. 文書の作業中のカラム定義に、足した列と enum の選択肢を加える（作業中の定義は置き換えない）。
-5. 自動リンクを再生成する。内容が変わった項目はハッシュが変わるため、リンクの相手側で要確認になる。",tracetool/services/editing.py;tracetool/services/versions.py;tracetool/colschema.py;tracetool/app.py,F-80;F-81;F-82;N-04
+5. ID を変えた項目があれば、ID を付け直す（PRC-30）。
+6. 自動リンクを再生成する（ID を付け直した参照元の文書も）。内容が変わった項目はハッシュが変わるため、リンクの相手側で要確認になる。",tracetool/services/editing.py;tracetool/services/versions.py;tracetool/colschema.py;tracetool/app.py,F-80;F-81;F-82;N-04;F-83
 PRC-29,処理,選択式の絞り込み,"enum・bool の列は、選んだ選択肢のどれかに当てはまる項目を残す。リスト形式ならどれかの要素が当てはまればよい。
 「選択肢に無い値」（enum の定義外の値、真偽のどちらでもない bool の値）は __other__、「空欄」は __empty__ で表す。enum・bool 以外の列の指定は無視する。",tracetool/services/items.py,F-61
+PRC-30,処理,ID の付け直し,"各行の orig_id と今の ID が違えば、{古い ID: 新しい ID} として扱う。新しい ID が編集前に別の項目で使われていた場合（入れ替え・削除した項目の ID の再利用）はエラーにする。
+1. リンク: この文書が関わる関係ごとに、この文書側の項目 ID が古い ID のリンクを、一意制約にかからないよう全部消してから新しい ID で入れ直す（行 ID・生成元のフラグ・確認ハッシュは引き継ぐ）。同じ組のリンクが既にあれば（新しい ID へのリンク切れなど）、生成元のフラグをまとめて 1 行にする。
+2. 確認ハッシュ: この文書側の確認ハッシュが編集前のハッシュと同じなら、「編集前の値の ID だけを変えた」ハッシュに付け替える（ID 以外を変えていなければ要確認にならず、変えていれば要確認になる）。
+3. 参照元の文書: 最新版のカラム定義でこの文書を参照先にしている文書の最新版で、参照 ID 列の古い ID を新しい ID に書き換え、内容ハッシュを計算し直す（版は増やさない。import_settings に ids_renamed_at を記録する）。書き換えた項目側の確認ハッシュが書き換え前のハッシュと同じなら、新しいハッシュに付け替える。
+POST /api/documents/{id}/rename-impact で、保存前に付け直すリンクの数（相手の文書ごと）と、参照元の文書ごとの項目を返す。",tracetool/services/renaming.py;tracetool/services/editing.py,F-83
 API-01,API,共通,"すべて JSON。パスの接頭辞は /api。本文は型付きモデル（Pydantic）で受け取る。
 エラーは {""error"": {""code"": ""..."", ""message"": ""日本語のメッセージ""}} で返す。項目 ID はパスではなくクエリで渡す（ID に / などが含まれ得るため）。",tracetool/app.py,C-02;N-05
 API-02,API,GET /documents,文書一覧（最新版、版の数、上位なし・下位なし・要確認・リンク切れの件数を含む）。,tracetool/app.py,F-60
@@ -190,7 +196,8 @@ API-26,API,使われている値の取得,PUT /imports/{sid}/distinct（取り�
 API-27,API,GET /documents/{id}/neighborhood?id=,横並び表示用。項目（最新版）の全列と、関係ごとの上位・下位のリンク先項目の全列（無効化したリンクは除く。リンク切れは data なし）、各文書のカラム定義、同じ文書の前後の項目 ID と位置を返す。リンク先は相手文書での並び順に並べる。,tracetool/app.py;tracetool/services/items.py,F-65
 API-28,API,GET /documents/{id}/latest-items,横並び表示の中央の列・編集モード用。文書の最新版の全項目（取り込み順。ID・全列の値・警告の列）と、版の ID・版番号、表示用のカラム定義を返す。,tracetool/app.py;tracetool/services/items.py,F-65
 API-29,API,表示用のカラム定義,横並び表示・項目一覧に返すカラム定義は、版のカラム定義に、文書の作業中カラム定義の重要度と幅を列キーで重ねたもの（表示だけの設定なので、取り込み直さなくても反映する）。neighborhood・latest-items・versions/{vid}/items で使う。,tracetool/services/items.py,F-66;F-67
-API-30,API,POST /documents/{id}/edit,編集モードの保存（PRC-28）。本文: base_version_id、mode（new / overwrite）、schema、items（[{data: {列キー: 値}}]。並び順のとおりに保存）、label。応答: version_id、version_no、mode。,tracetool/app.py;tracetool/services/editing.py,F-80;F-82
+API-30,API,POST /documents/{id}/edit,"編集モードの保存（PRC-28）。本文: base_version_id、mode（new / overwrite）、schema、items（[{orig_id: 編集を始めたときの ID（追加した行は null）, data: {列キー: 値}}]。並び順のとおりに保存）、label。応答: version_id、version_no、mode、renamed（付け直した ID の数）。",tracetool/app.py;tracetool/services/editing.py,F-80;F-82
+API-31,API,POST /documents/{id}/rename-impact,"ID を付け直すと変わるもの（PRC-30）。本文: renames（{古い ID: 新しい ID}）。応答: links（[{document, count}]）、documents（[{document, version_no, count, items（先頭 20 件）}]）。読み取りのみ。",tracetool/app.py;tracetool/services/editing.py;tracetool/services/renaming.py,F-83
 UI-01,画面,共通,"ハッシュ形式のルーティング（#/documents/3/items など）で、1 枚の HTML 内で画面を切り替える。エラーは画面右下にトースト表示する。文言はすべて日本語。
 出力ボタンは、ファイルを取得してからブラウザに保存させ、「作成しています」「ダウンロードしました: ファイル名」を通知する（失敗したらエラーを通知する）。表が画面に収まらない場合は、その枠の中だけで横スクロールする（ページ全体ははみ出さない）。
 通知は同時に 4 件までとし、古いものから消す。出力の「作成しています」は結果の通知に置き換える。リスト形式の値は、その列の区切り文字（改行・タブ・空白以外の最初のもの）で区切って表示する。",tracetool/static/app.js;tracetool/static/router.js;tracetool/static/api.js;tracetool/static/style.css,N-05;F-70;F-71
@@ -226,9 +233,10 @@ UI-10,画面,S9 横並び表示,"#/documents/{id}/side?item= で開く。「上�
 上位・下位のカードの ID を押すと、その項目の文書の横並び表示に切り替える。「前の項目」「次の項目」（Alt + ← / →）で同じ文書の項目を順に選ぶ。上位・下位が複数ある場合は縦に並べ、列ごとにスクロールする。画面の幅が狭くても 3 列を保ち（1 列あたり最小 260px）、収まらない分は横にスクロールする。項目詳細（S5）の「上位・下位と横並びで見る」から開く。",tracetool/static/views/side.js;tracetool/static/views/items.js,F-65;F-62;F-66;F-67;F-68;F-69
 UI-11,画面,確認ダイアログの方針,確認ダイアログは、元に戻せない削除（文書・版・トレース関係）と、編集モードで変更を破棄するときだけに出す。enum への変換、リンクの削除・無効化などは確認せずに実行し、結果を画面右下の通知で知らせる（自動リンクの無効化は「元に戻す」で戻せる）。,tracetool/static/views/schema-editor.js;tracetool/static/views/items.js,N-07
 UI-12,画面,S4 項目一覧の編集モード,"最新版の全項目を表で示し（500 件ずつ。長い値は折り返す）、セルを押すとその場で編集する（Esc で閉じる）。文字列・番号は入力欄（リスト形式は 1 行に 1 つ）、enum・bool は選択肢（リスト形式はチェックボックス）。選択肢に無い既存の値も残して選べる。enum は「＋ 選択肢を追加」で選択肢を足してその値にする。
-変更したセル・追加した行・削除する行（取り消し線。「戻す」で戻せる）を色で示し、変更・追加・削除の件数を上部に出す。取り込み済みの項目の ID は変えられないことを、押したときに通知する。追加した行の ID が重複していれば示し、保存できなくする。
+変更したセル・追加した行・削除する行（取り消し線。「戻す」で戻せる）を色で示し、変更・追加・削除の件数を上部に出す。取り込み済みの項目の ID を編集するときは、元の ID と「リンクと参照している ID もすべて付け直す」ことを編集欄に示し、変えた ID は「古い ID → 新しい ID」と表示する。ID が重複している場合と、編集前に別の項目で使われていた ID に変えた場合は示して保存できなくする。
+保存の画面では、ID の変更があれば変更の一覧と、付け直すリンクの数・参照元の文書の項目（rename-impact）を示し、元のファイルの ID も直すよう注意する。
 「＋ 列を追加」で列名・型（文字列・番号・enum・bool）・リスト形式・enum の選択肢を指定して列を足す（追加した列は × で取り消せる）。
-「保存…」で、新しい版として保存するか、最新版を書き換えるかを選び、版のラベルを入れて保存する。保存したら最新版の表示に戻る。「編集をやめる」は、変更があれば破棄してよいか確認する。保存せずにタブを閉じる・再読み込みする場合は、ブラウザに確認させる。",tracetool/static/views/item-editor.js;tracetool/static/views/items.js;tracetool/static/views/cells.js,F-80;F-81;F-82;F-68
+「保存…」で、新しい版として保存するか、最新版を書き換えるかを選び、版のラベルを入れて保存する。保存したら最新版の表示に戻る。「編集をやめる」は、変更があれば破棄してよいか確認する。保存せずにタブを閉じる・再読み込みする場合は、ブラウザに確認させる。",tracetool/static/views/item-editor.js;tracetool/static/views/items.js;tracetool/static/views/cells.js,F-80;F-81;F-82;F-68;F-83
 ERR-01,エラー処理,ログの方針,ログはデータフォルダの logs/ に出力する（1MB × 4 世代）。ログには項目の値を書かない。書くのは操作の種類、文書 ID、件数、エラーの種類まで。,tracetool/__main__.py;tracetool/app.py,C-01
 ERR-02,エラー処理,予期しない例外,例外メッセージ（値を含みうる）は書かず、例外の型と発生場所（ファイル名・行番号・関数名）だけを記録する。応答にも例外の型だけを返す。,tracetool/app.py,C-01
 ERR-03,エラー処理,入力の型の誤り,リクエスト本文の型の誤り（422）は、項目名だけを返し、入力値は返さない。,tracetool/app.py,C-01
@@ -238,7 +246,7 @@ SEC-03,セキュリティ,CSRF,GET 以外の要求で、Origin がこのツー�
 SEC-04,セキュリティ,XSS,画面では値を {{ }} で表示し、v-html / innerHTML を使わない。,tracetool/static/views/,C-01
 SEC-05,セキュリティ,外部通信なし,画面のライブラリはすべて同梱し、CDN や外部 URL を参照しない。OpenAPI・ドキュメント画面は無効にする。,tracetool/static/index.html;tracetool/app.py,C-03;N-03
 TST-01,テスト,単体テスト,pytest で、値の正規化、ハッシュ、各形式の読み込み（結合セル・CP932・セル内改行・TSV・日付）、検証を確認する。,tests/test_colschema.py;tests/test_readers.py,F-02;F-03;F-10;F-11;F-14
-TST-02,テスト,API テスト,FastAPI の TestClient で、取り込み → 版の追加 → リンクの引き継ぎ・要確認 → 差分 → 出力 の一連の流れを確認する。取り込みの追加機能（データの範囲、シートのプレビュー、ID の自動採番、セル内の改行と enum）と、編集モードの保存（新しい版・書き換え・検証・衝突・リスト）、選択式の絞り込みを確認する。,tests/test_flow.py;tests/test_import_options.py;tests/test_editing.py,F-17;F-42;F-44;F-45;F-50;F-12;F-23;F-80;F-82
+TST-02,テスト,API テスト,FastAPI の TestClient で、取り込み → 版の追加 → リンクの引き継ぎ・要確認 → 差分 → 出力 の一連の流れを確認する。取り込みの追加機能（データの範囲、シートのプレビュー、ID の自動採番、セル内の改行と enum）と、編集モードの保存（新しい版・書き換え・検証・衝突・リスト）、選択式の絞り込みを確認する。ID の付け直し（リンク・参照元の文書・要確認の扱い・受け付けない変更）も確認する。,tests/test_flow.py;tests/test_import_options.py;tests/test_editing.py,F-17;F-42;F-44;F-45;F-50;F-12;F-23;F-80;F-82;F-83
 TST-03,テスト,回帰テスト,取り込みの順序と要確認、フラグの組み合わせ、複数の関係、文書の削除と ID、DB の移行、出力の内容（制御文字・数式）、Host / Origin の検査、ログに値が書かれないこと、読み込みの細かな条件を確認する。,tests/test_regressions.py,F-43;F-45;C-01
 TST-04,テスト,テストデータ,テストデータはテスト内で生成する。実際の仕様書はリポジトリに置かない。,tests/conftest.py,C-01
 TST-05,テスト,性能の確認,"上位・下位とも 10,000 行・15 列、リンク 2 万本のデータで、取り込み・一覧・検索・トレース評価・出力の時間を測る。

@@ -1,6 +1,6 @@
 // 項目一覧の編集モード。最新版の全項目を画面で編集し、新しい版として、または最新版を書き換えて保存する。
 // セルを押すとその場で編集できる。enum・bool は選択肢から選ぶ（enum は選択肢を足せる）。
-// 既存の項目の ID は変えられない（変えるとリンクが切れるため）。追加した行の ID だけ入力する。
+// 取り込み済みの項目の ID を変えると、保存時にリンクと他の文書の参照 ID 列の値も新しい ID に付け直す。
 
 import { api, toast, TYPE_LABEL } from "../api.js";
 import { CellValue, widthStyle, choiceOptions } from "./cells.js";
@@ -121,6 +121,9 @@ const EditCell = {
       <template v-else>
         <textarea :rows="rows" :value="text" @input="onText" :placeholder="isList ? '1 行に 1 つ' : ''" v-focus></textarea>
         <span v-if="isList" class="sub">1 行に 1 つ</span>
+        <span v-if="col.type === 'id' && row.orig" class="id-note">
+          元の ID: {{ row.orig.item_id }}。ID を変えると、保存時にこの項目のリンクと、他の文書がこの項目を参照している ID もすべて新しい ID に付け直します。
+        </span>
       </template>
     </div>
   `,
@@ -156,6 +159,19 @@ export default {
     const idOf = (r) => (r.data[idCol.value.key] ?? "").toString().trim();
 
     const isChanged = (r, c) => !r.orig || !same(r.data[c.key], r.orig.data[c.key]);
+    const baseIds = computed(() => new Set(base.value?.items.map((i) => i.item_id)));
+    // ID を変えた行: { 古い ID: 新しい ID }
+    const renames = computed(() => {
+      const out = {};
+      for (const r of rows.value) {
+        if (!r.orig || r.deleted) continue;
+        const id = idOf(r);
+        if (id && id !== r.orig.item_id) out[r.orig.item_id] = id;
+      }
+      return out;
+    });
+    // 編集前に別の項目で使われていた ID への変更（入れ替え・削除した項目の ID の再利用）は付け直しを取り違えるため受け付けない
+    const badRenames = computed(() => Object.entries(renames.value).filter(([, n]) => baseIds.value.has(n)).map(([, n]) => n));
     const addedCols = computed(() => {
       const before = new Set(base.value?.schema.columns.map((c) => c.key));
       return columns.value.filter((c) => !before.has(c.key));
@@ -167,7 +183,7 @@ export default {
         else if (r.deleted) deleted++;
         else if (columns.value.some((c) => isChanged(r, c))) changed++;
       }
-      return { changed, added, deleted, columns: addedCols.value.length };
+      return { changed, added, deleted, columns: addedCols.value.length, renamed: Object.keys(renames.value).length };
     });
     const choicesChanged = computed(() =>
       columns.value.some((c) => {
@@ -204,10 +220,6 @@ export default {
 
     function activate(r, c) {
       if (r.deleted) return;
-      if (c.type === "id" && r.orig) {
-        toast("取り込み済みの項目の ID は変えられません（変えるとリンクが切れるため）。ID を直す場合は、元の表を直して取り込み直してください");
-        return;
-      }
       active.value = { uid: r.uid, key: c.key };
     }
     const isActive = (r, c) => active.value && active.value.uid === r.uid && active.value.key === c.key;
@@ -274,6 +286,14 @@ export default {
 
     // --- 保存 ---
     const saveForm = reactive({ open: false, mode: "new", label: "" });
+    const impact = ref(null); // ID を付け直すと変わるもの
+    async function openSave() {
+      impact.value = null;
+      saveForm.open = true;
+      if (stats.value.renamed) {
+        impact.value = await api.post(`/api/documents/${props.docId}/rename-impact`, { renames: renames.value });
+      }
+    }
     async function save() {
       saving.value = true;
       try {
@@ -281,10 +301,11 @@ export default {
           base_version_id: base.value.version_id,
           mode: saveForm.mode,
           schema: schema.value,
-          items: rows.value.filter((x) => !x.deleted).map((x) => ({ data: x.data })),
+          items: rows.value.filter((x) => !x.deleted).map((x) => ({ orig_id: x.orig?.item_id ?? null, data: x.data })),
           label: saveForm.label,
         });
-        toast(r.mode === "new" ? `v${r.version_no} として保存しました` : `v${r.version_no} を書き換えて保存しました`);
+        toast((r.mode === "new" ? `v${r.version_no} として保存しました` : `v${r.version_no} を書き換えて保存しました`) +
+          (r.renamed ? `（ID を ${r.renamed} 件変更し、リンクと参照を付け直しました）` : ""));
         saveForm.open = false;
         window.removeEventListener("beforeunload", onBeforeUnload);
         emit("close", { saved: true, versionId: r.version_id });
@@ -311,7 +332,7 @@ export default {
     });
 
     return {
-      base, schema, rows, columns, idCol, active, page, pages, q, visible, filtered, saving, stats, dirty, dupIds, addedCols,
+      base, schema, rows, columns, idCol, active, renames, badRenames, impact, openSave, page, pages, q, visible, filtered, saving, stats, dirty, dupIds, addedCols,
       isChanged, activate, isActive, addRow, toggleDelete, colForm, addColumn, removeAddedColumn, addChoice,
       saveForm, save, cancel, idOf, widthStyle, TYPE_LABEL,
     };
@@ -323,10 +344,10 @@ export default {
         <span class="sub">v{{ base.version_no }}（最新版）を元に編集しています。セルを押すと編集できます（Esc で閉じる）。</span>
         <span class="spacer"></span>
         <span class="edit-stats">
-          変更 {{ stats.changed }} 行 / 追加 {{ stats.added }} 行 / 削除 {{ stats.deleted }} 行<template v-if="stats.columns"> / 列の追加 {{ stats.columns }}</template>
+          変更 {{ stats.changed }} 行 / 追加 {{ stats.added }} 行 / 削除 {{ stats.deleted }} 行<template v-if="stats.renamed"> / ID の変更 {{ stats.renamed }}</template><template v-if="stats.columns"> / 列の追加 {{ stats.columns }}</template>
         </span>
         <button class="btn" @click="cancel">編集をやめる</button>
-        <button class="btn primary" :disabled="!dirty || dupIds.size > 0" @click="saveForm.open = true" :title="dupIds.size ? 'ID が重複しています' : ''">保存…</button>
+        <button class="btn primary" :disabled="!dirty || dupIds.size > 0 || badRenames.length > 0" @click="openSave" :title="dupIds.size || badRenames.length ? 'ID に誤りがあります' : ''">保存…</button>
       </div>
 
       <div class="toolbar">
@@ -334,6 +355,7 @@ export default {
         <button class="btn" @click="addRow">＋ 行を追加</button>
         <button class="btn" @click="colForm.open = !colForm.open">＋ 列を追加</button>
         <span v-if="dupIds.size" class="err-text">ID が重複しています: {{ [...dupIds].join('、') }}</span>
+        <span v-if="badRenames.length" class="err-text">編集前に別の項目で使われていた ID には変えられません: {{ badRenames.join('、') }}</span>
         <span class="spacer"></span>
         <span class="sub">{{ filtered.length }} 件</span>
         <button class="icon-btn" :disabled="page <= 1" @click="page--">‹</button>
@@ -362,6 +384,24 @@ export default {
         <div class="modal">
           <h2>編集した内容を保存</h2>
           <p class="sub">変更 {{ stats.changed }} 行 / 追加 {{ stats.added }} 行 / 削除 {{ stats.deleted }} 行<template v-if="stats.columns"> / 列の追加 {{ stats.columns }}</template></p>
+          <div v-if="stats.renamed" class="rename-box">
+            <b>ID の変更（{{ stats.renamed }} 件）</b>
+            <ul class="rename-list">
+              <li v-for="(n, o) in renames" :key="o"><span class="idcell">{{ o }}</span> → <span class="idcell">{{ n }}</span></li>
+            </ul>
+            <p v-if="!impact" class="sub">付け直す対象を調べています…</p>
+            <template v-else>
+              <p>保存すると、次も新しい ID に付け直します。</p>
+              <ul>
+                <li v-for="l in impact.links" :key="'l' + l.document">「{{ l.document }}」とのリンク {{ l.count }} 本</li>
+                <li v-for="d in impact.documents" :key="'d' + d.document">
+                  「{{ d.document }}」（v{{ d.version_no }}）の参照 ID 列: {{ d.count }} 項目（{{ d.items.join('、') }}{{ d.count > d.items.length ? ' …' : '' }}）。版は増やさずに書き換えます
+                </li>
+                <li v-if="!impact.links.length && !impact.documents.length">付け直すリンク・参照はありません。</li>
+              </ul>
+              <p class="warn-text small">元のファイル（この文書と、参照している文書）の ID も直してください。直さずに取り込み直すと、古い ID に戻り、リンクが切れます。</p>
+            </template>
+          </div>
           <label class="radio-block">
             <input type="radio" value="new" v-model="saveForm.mode">
             <span><b>新しい版として保存（v{{ base.version_no }} → 新しい版）</b><br>
@@ -397,8 +437,11 @@ export default {
               <td v-for="c in columns" :key="c.key" :style="widthStyle(c)" @click="activate(r, c)"
                   :class="{edited: r.orig && isChanged(r, c), editing: isActive(r, c), idcell: c.type === 'id',
                            invalid: r.orig && !isChanged(r, c) && r.orig.invalid.includes(c.key),
-                           dup: c.type === 'id' && dupIds.has(idOf(r)), locked: c.type === 'id' && r.orig}">
+                           dup: c.type === 'id' && (dupIds.has(idOf(r)) || badRenames.includes(idOf(r)))}">
                 <EditCell v-if="isActive(r, c)" :col="c" :row="r" @add-choice="v => addChoice(c, v)" @done="active = null" />
+                <template v-else-if="c.type === 'id' && r.orig && renames[r.orig.item_id]">
+                  <span class="old-id">{{ r.orig.item_id }}</span> → {{ idOf(r) }}
+                </template>
                 <CellValue v-else :value="r.data[c.key]" :col="c" />
               </td>
               <td class="nowrap"><button class="btn small" :class="r.deleted ? '' : 'danger-ghost'" @click.stop="toggleDelete(r)">{{ r.deleted ? '戻す' : '削除' }}</button></td>

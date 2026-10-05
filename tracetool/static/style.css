@@ -302,7 +302,6 @@ ul.links li.inactive > a, ul.links li.inactive > span:not(.link-actions) { opaci
 .edit-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: var(--accent-weak); border: 1px solid var(--accent); border-radius: 6px; padding: 6px 10px; margin-bottom: 8px; }
 .edit-stats { font-size: 12px; }
 .edit-table td { cursor: text; }
-.edit-table td.locked { cursor: not-allowed; color: var(--sub); }
 .edit-table td.edited { background: var(--sel); }
 .edit-table td.editing { background: var(--panel); outline: 2px solid var(--accent); outline-offset: -2px; vertical-align: top; }
 .edit-table td.dup { background: var(--err-bg); color: var(--err); }
@@ -327,3 +326,8 @@ ul.links li.inactive > a, ul.links li.inactive > span:not(.link-actions) { opaci
 .radio-block:has(input:checked) { border-color: var(--accent); background: var(--accent-weak); }
 .radio-block input { margin-top: 4px; }
 .items-table.wrap td:not(.idcell) { min-width: 120px; }
+.edit-cell .id-note { font-size: 12px; color: var(--warn); background: var(--warn-bg); padding: 4px 6px; border-radius: 4px; white-space: normal; font-family: inherit; }
+.edit-table .old-id { text-decoration: line-through; color: var(--sub); }
+.rename-box { border: 1px solid var(--warn); background: var(--warn-bg); border-radius: 6px; padding: 8px 10px; max-height: 260px; overflow-y: auto; }
+.rename-box p, .rename-box ul { margin: 4px 0; }
+.rename-list { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; }

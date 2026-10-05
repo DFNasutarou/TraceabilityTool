@@ -3,6 +3,8 @@
 保存のしかたは 2 通り:
 - new: 新しい版として保存する（版番号を上げる。差分で編集前と比べられる）
 - overwrite: 最新版をそのまま書き換える（版番号は変えない）
+
+取り込み済みの項目の ID を変えた場合は、リンクと他の文書の参照 ID も付け直す（renaming.py）。
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from ..errors import AppError
 from . import documents as doc_svc
 from . import links as link_svc
 from . import relations as rel_svc
+from . import renaming
 from . import versions as ver_svc
 
 MODES = ("new", "overwrite")
@@ -87,6 +90,39 @@ def build_items(conn: sqlite3.Connection, doc_id: int, schema: dict, rows: list[
     return items
 
 
+def collect_renames(base_items: list[dict], rows: list[dict], id_key: str) -> dict[str, str]:
+    """各行の orig_id（編集を始めたときの ID）と今の ID から、付け直す ID の対応 {古い ID: 新しい ID} を作る。"""
+    base_ids = {i["item_id"] for i in base_items}
+    renames: dict[str, str] = {}
+    errors: list[str] = []
+    used: set[str] = set()
+    for n, row in enumerate(rows, start=1):
+        orig = row.get("orig_id")
+        if orig is None:
+            continue
+        if orig not in base_ids or orig in used:
+            errors.append(f"{n} 行目: 元の ID「{orig}」が正しくありません")
+            continue
+        used.add(orig)
+        new = str((row.get("data") or {}).get(id_key) or "").strip()
+        if not new or new == orig:
+            continue
+        if new in base_ids:
+            # 入れ替えや、削除した項目の ID の再利用は、リンクの付け直しを取り違えるため受け付けない
+            errors.append(f"{n} 行目: ID「{orig}」を「{new}」に変えられません（編集前に別の項目で使われている ID です）")
+            continue
+        renames[orig] = new
+    if errors:
+        raise AppError("保存できません:\n" + "\n".join(errors[:MAX_ERRORS_SHOWN]), code="edit_errors")
+    return renames
+
+
+def rename_impact(conn: sqlite3.Connection, doc_id: int, renames: dict[str, str]) -> dict:
+    """ID を付け直すと変わるもの（保存前の確認用）。"""
+    doc_svc.get_document(conn, doc_id)
+    return renaming.impact(conn, doc_id, renames)
+
+
 def save(
     conn: sqlite3.Connection, doc_id: int, base_version_id: int, mode: str, schema: dict, rows: list[dict], label: str = ""
 ) -> dict:
@@ -106,6 +142,15 @@ def save(
         if ref is not None and rel_svc.relation_between(conn, doc_id, ref) is None:
             raise AppError(f"参照 ID 列「{col['name']}」の参照先との間にトレース関係がありません")
     items = build_items(conn, doc_id, schema, rows)
+    base_items = ver_svc.load_items(conn, latest["id"])
+    idc = colschema.id_column(schema)
+    renames = collect_renames(base_items, rows, idc["key"])
+    # ID だけを変えた場合のハッシュ（リンクの確認ハッシュを付け替え、ID の変更だけで要確認にしないため）
+    base_by_id = {i["item_id"]: i for i in base_items}
+    acks = {
+        new: (base_by_id[old]["hash"], colschema.content_hash({**base_by_id[old]["data"], idc["key"]: new}))
+        for old, new in renames.items()
+    }
 
     settings = {"format": "edit", "base_version_no": latest["version_no"], "edited_at": now_iso()}
     if mode == "new":
@@ -119,6 +164,12 @@ def save(
             conn.execute("UPDATE versions SET label = ? WHERE id = ?", (label, version_id))
     merged = _merge_working_schema(doc["schema"], schema)
     conn.execute("UPDATE documents SET schema_json = ? WHERE id = ?", (json.dumps(merged, ensure_ascii=False), doc_id))
+    referring: list[int] = []
+    if renames:
+        renaming.rename_links(conn, doc_id, renames, acks)
+        referring = renaming.rename_references(conn, doc_id, renames)
     link_svc.regenerate_auto_links(conn, doc_id)
+    for other in referring:
+        link_svc.regenerate_auto_links(conn, other)
     version_no = conn.execute("SELECT version_no FROM versions WHERE id = ?", (version_id,)).fetchone()[0]
-    return {"version_id": version_id, "version_no": version_no, "mode": mode}
+    return {"version_id": version_id, "version_no": version_no, "mode": mode, "renamed": len(renames)}

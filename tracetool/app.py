@@ -104,6 +104,10 @@ class EditIn(_Body):
     label: str = ""
 
 
+class RenamesIn(_Body):
+    renames: dict[str, str]  # 古い ID → 新しい ID
+
+
 class ColumnIn(_Body):
     column: dict
 
@@ -246,6 +250,12 @@ def create_app(db: Database, port: int | None = None, extra_hosts: tuple[str, ..
             result = edit_svc.save(conn, doc_id, body.base_version_id, body.mode, body.schema_, body.items, body.label)
         log.info("items edited: document=%s version=%s mode=%s", doc_id, result["version_id"], body.mode)
         return result
+
+    @app.post("/api/documents/{doc_id}/rename-impact")
+    def rename_impact(doc_id: int, body: RenamesIn):
+        # 読み取りだけだが、ID の一覧が長くなり得るため本文で受け取る
+        with db.read() as conn:
+            return edit_svc.rename_impact(conn, doc_id, body.renames)
 
     @app.get("/api/documents/{doc_id}/neighborhood")
     def item_neighborhood(doc_id: int, id: str):

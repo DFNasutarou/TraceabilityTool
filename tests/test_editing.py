@@ -147,3 +147,85 @@ def test_choice_filters(client):
 
     ok(edit(client, req, base, "overwrite", blank))
     assert ids(**{"m.rmust": "__empty__"}) == ["REQ-002"]
+
+
+# --- ID の付け直し ------------------------------------------------------------------
+
+
+def edit_with_orig(client, doc, base, mutate, mode="new"):
+    rows = [{"orig_id": i["item_id"], "data": dict(i["data"])} for i in base["items"]]
+    mutate(rows)
+    return client.post(
+        f"/api/documents/{doc}/edit",
+        json={"base_version_id": base["version_id"], "mode": mode, "schema": base["schema"], "items": rows},
+    )
+
+
+def test_rename_id_updates_links_and_references(client):
+    req, scr, rel = setup(client)
+    do_import(client, req, "req.csv", req_csv())
+    do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)  # SCR-01 → REQ-001;REQ-002、SCR-02 → REQ-002
+    # 手動リンクも付け直されることを確かめる
+    ok(client.post("/api/links", json={"relation_id": rel, "upper_item_id": "REQ-002", "lower_item_id": "SCR-03"}))
+    base = latest(client, req)
+    renames = {"REQ-002": "REQ-020"}
+
+    impact = ok(client.post(f"/api/documents/{req}/rename-impact", json={"renames": renames}))
+    assert impact["links"] == [{"document": "画面定義書", "count": 3}]
+    assert impact["documents"][0]["document"] == "画面定義書"
+    assert impact["documents"][0]["items"] == ["SCR-01", "SCR-02"]
+
+    def mutate(rows):
+        rows[1]["data"]["rid"] = "REQ-020"
+
+    r = ok(edit_with_orig(client, req, base, mutate))
+    assert r["renamed"] == 1
+    # リンクは新しい ID に付け替わり、ID を変えただけなので要確認にもリンク切れにもならない
+    ev = ok(client.get(f"/api/trace/{rel}"))
+    pairs = {(l["upper_item_id"], l["lower_item_id"]) for l in ev["links"]}
+    assert ("REQ-020", "SCR-01") in pairs and ("REQ-020", "SCR-02") in pairs and ("REQ-020", "SCR-03") in pairs
+    assert not any("REQ-002" in p for p in pairs)
+    assert ev["suspect"] == [] and not any(l["upper_item_id"] == "REQ-020" for l in ev["broken"])
+    # 下位文書の参照 ID 列も書き換わる（版は増えない）
+    scr_items = {i["item_id"]: i for i in latest(client, scr)["items"]}
+    ref_key = [c for c in latest(client, scr)["schema"]["columns"] if c.get("ref_document_id")][0]["key"]
+    assert scr_items["SCR-01"]["data"][ref_key] == ["REQ-001", "REQ-020"]
+    assert scr_items["SCR-02"]["data"][ref_key] == ["REQ-020"]
+    assert len(ok(client.get(f"/api/documents/{scr}/versions"))) == 1
+    # 手動リンクは手動のまま
+    manual = [l for l in ev["links"] if l["lower_item_id"] == "SCR-03"][0]
+    assert manual["origin"] == "manual"
+
+
+def test_rename_with_other_changes_is_suspect(client):
+    req, scr, rel = setup(client)
+    do_import(client, req, "req.csv", req_csv())
+    do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)
+    base = latest(client, req)
+
+    def mutate(rows):
+        rows[0]["data"]["rid"] = "REQ-100"
+        rows[0]["data"]["rname"] = "ログイン（改）"
+
+    ok(edit_with_orig(client, req, base, mutate, mode="overwrite"))
+    ev = ok(client.get(f"/api/trace/{rel}"))
+    assert {(l["upper_item_id"], l["lower_item_id"]) for l in ev["suspect"]} == {("REQ-100", "SCR-01")}
+
+
+def test_rename_rejects_existing_id(client):
+    req, scr, rel = setup(client)
+    do_import(client, req, "req.csv", req_csv())
+    base = latest(client, req)
+
+    def swap(rows):
+        rows[0]["data"]["rid"] = "REQ-002"
+        rows[1]["data"]["rid"] = "REQ-001"
+
+    r = edit_with_orig(client, req, base, swap)
+    assert r.status_code == 400 and "別の項目で使われている" in r.json()["error"]["message"]
+
+    def reuse_deleted(rows):
+        rows[0]["data"]["rid"] = "REQ-003"
+        del rows[2]
+
+    assert edit_with_orig(client, req, base, reuse_deleted).status_code == 400
