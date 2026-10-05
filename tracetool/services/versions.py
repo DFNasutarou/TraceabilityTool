@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import sqlite3
 
+from .. import colschema
+from ..db import now_iso
 from ..errors import NotFound
 
 
@@ -106,6 +108,66 @@ def latest_hashes(conn: sqlite3.Connection, doc_id: int) -> dict[str, str]:
     if v is None:
         return {}
     return version_hashes(conn, v["id"])
+
+
+def next_version_no(conn: sqlite3.Connection, doc_id: int) -> int:
+    """次の版番号。削除済みの版の番号も再利用しないよう、過去最大値を meta に残す。"""
+    version_no = conn.execute(
+        "SELECT COALESCE(MAX(version_no), 0) + 1 FROM versions WHERE document_id = ?", (doc_id,)
+    ).fetchone()[0]
+    key = f"max_version_no:{doc_id}"
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    if row is not None:
+        version_no = max(version_no, int(row["value"]) + 1)
+    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (key, str(version_no)))
+    return version_no
+
+
+def _insert_items(conn: sqlite3.Connection, version_id: int, items: list[dict]) -> None:
+    """items: [{"item_id", "data", "invalid"}]（並び順のとおりに row_no を振る）。"""
+    conn.executemany(
+        "INSERT INTO items(version_id, item_id, row_no, data_json, invalid_json, content_hash) VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (
+                version_id,
+                it["item_id"],
+                n,
+                json.dumps(it["data"], ensure_ascii=False),
+                json.dumps(it["invalid"]),
+                colschema.content_hash(it["data"]),
+            )
+            for n, it in enumerate(items, start=1)
+        ],
+    )
+
+
+def create_version(
+    conn: sqlite3.Connection, doc_id: int, label: str, source_filename: str, settings: dict, schema: dict, items: list[dict]
+) -> int:
+    """新しい版を作る（項目も挿入する）。conn はトランザクション内で渡すこと。"""
+    cur = conn.execute(
+        "INSERT INTO versions(document_id, version_no, label, source_filename, import_settings, schema_json, "
+        "row_count, imported_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            doc_id, next_version_no(conn, doc_id), label or "", source_filename,
+            json.dumps(settings, ensure_ascii=False), json.dumps(schema, ensure_ascii=False), len(items), now_iso(),
+        ),
+    )
+    _insert_items(conn, cur.lastrowid, items)
+    return cur.lastrowid
+
+
+def replace_items(conn: sqlite3.Connection, version_id: int, schema: dict, items: list[dict], settings: dict) -> None:
+    """既存の版の項目とカラム定義を置き換える（画面で編集して、版を上げずに保存する場合）。"""
+    conn.execute("DELETE FROM items WHERE version_id = ?", (version_id,))
+    _insert_items(conn, version_id, items)
+    conn.execute(
+        "UPDATE versions SET schema_json = ?, row_count = ?, import_settings = ? WHERE id = ?",
+        (json.dumps(schema, ensure_ascii=False), len(items), json.dumps(settings, ensure_ascii=False), version_id),
+    )
+    # 版の項目のキャッシュは「版は不変」を前提にしているため、ここで捨てる
+    if hasattr(conn, "clear_cache"):
+        conn.clear_cache()
 
 
 def delete_version(conn: sqlite3.Connection, version_id: int) -> int:

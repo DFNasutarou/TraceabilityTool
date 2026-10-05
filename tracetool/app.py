@@ -19,6 +19,7 @@ from .db import Database
 from .errors import AppError
 from .services import diff as diff_svc
 from .services import documents as doc_svc
+from .services import editing as edit_svc
 from .services import export as export_svc
 from .services import items as items_svc
 from .services import links as link_svc
@@ -84,12 +85,23 @@ class ImportSettingsIn(_Body):
     encoding: str | None = None
     header_row: int = Field(default=1, ge=1)
     sheets: list[str] = []
+    data_start: int | None = Field(default=None, ge=1)
+    data_end: int | None = Field(default=None, ge=1)
+    stop_at_blank: bool = False
 
 
 class ImportTextIn(_Body):
     document_id: int
     text: str
     format: str = "auto"
+
+
+class EditIn(_Body):
+    base_version_id: int
+    mode: str  # new: 新しい版として保存 / overwrite: 最新版を書き換える
+    schema_: dict = Field(alias="schema")
+    items: list[dict]
+    label: str = ""
 
 
 class ColumnIn(_Body):
@@ -228,6 +240,13 @@ def create_app(db: Database, port: int | None = None, extra_hosts: tuple[str, ..
         with db.read() as conn:
             return items_svc.latest_items(conn, doc_id)
 
+    @app.post("/api/documents/{doc_id}/edit")
+    def save_edit(doc_id: int, body: EditIn):
+        with db.tx() as conn:
+            result = edit_svc.save(conn, doc_id, body.base_version_id, body.mode, body.schema_, body.items, body.label)
+        log.info("items edited: document=%s version=%s mode=%s", doc_id, result["version_id"], body.mode)
+        return result
+
     @app.get("/api/documents/{doc_id}/neighborhood")
     def item_neighborhood(doc_id: int, id: str):
         # 横並び表示用。項目 ID は / を含み得るためクエリで受け取る
@@ -261,8 +280,13 @@ def create_app(db: Database, port: int | None = None, extra_hosts: tuple[str, ..
         size: int = 100,
     ):
         filters = {k[2:]: v for k, v in request.query_params.items() if k.startswith("f.")}
+        # m.<列キー>=選択肢（複数指定可）: enum・bool の列を選択肢で絞り込む
+        choices: dict[str, list[str]] = {}
+        for k, v in request.query_params.multi_items():
+            if k.startswith("m."):
+                choices.setdefault(k[2:], []).append(v)
         with db.read() as conn:
-            return items_svc.query_items(conn, vid, q, filters, sort, desc, trace, page, size)
+            return items_svc.query_items(conn, vid, q, filters, sort, desc, trace, page, size, choices)
 
     @app.get("/api/versions/{vid}/item")
     def item_detail(vid: int, id: str):
@@ -352,7 +376,14 @@ def create_app(db: Database, port: int | None = None, extra_hosts: tuple[str, ..
     def import_settings(sid: str, body: ImportSettingsIn):
         session = sessions.get(sid)
         with db.read() as conn:
-            return importer.apply_settings(conn, session, body.encoding or None, body.header_row, body.sheets)
+            return importer.apply_settings(
+                conn, session, body.encoding or None, body.header_row, body.sheets,
+                body.data_start, body.data_end, body.stop_at_blank,
+            )
+
+    @app.get("/api/imports/{sid}/preview")
+    def import_preview(sid: str, sheet: str | None = None, encoding: str | None = None):
+        return importer.preview(sessions.get(sid), sheet, encoding or None)
 
     @app.post("/api/imports/text")
     def import_start_text(body: ImportTextIn):

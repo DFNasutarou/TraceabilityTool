@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import colschema, readers
-from .db import now_iso
 from .errors import AppError, NotFound
 from .services import documents as doc_svc
 from .services import links as link_svc
@@ -23,6 +22,7 @@ from .services import versions as ver_svc
 
 SESSION_TTL_SEC = 30 * 60
 PREVIEW_ROWS = 30
+PREVIEW_TAIL_ROWS = 20  # データの終了行を指定できるよう、末尾の行もプレビューに含める
 MAX_MESSAGES = 1000
 
 
@@ -35,6 +35,9 @@ class ImportSession:
     data: bytes
     encoding: str | None = None
     header_row: int = 1
+    data_start: int | None = None
+    data_end: int | None = None
+    stop_at_blank: bool = False
     sheets: list[str] = field(default_factory=list)
     table: readers.Table | None = None
     last_access: float = field(default_factory=time.monotonic)
@@ -140,14 +143,48 @@ def _start(store: SessionStore, doc_id: int, filename: str, fmt: str, data: byte
     else:
         session.text(None)  # 文字コードを自動判定しておく
     store.add(session)
+    first = session.sheets[0] if sheets else None
     return {
         "session_id": session.id,
         "filename": filename,
         "format": fmt,
         "encoding": session.encoding,
         "sheets": sheets,
-        "preview": session.raw_grid(session.sheets[0] if sheets else None)[:PREVIEW_ROWS],
-        "suggested_header_row": readers.suggest_header_row(session.raw_grid(session.sheets[0] if sheets else None)),
+        "preview": session.raw_grid(first)[:PREVIEW_ROWS],
+        "suggested_header_row": readers.suggest_header_row(session.raw_grid(first)),
+        "sheet_preview": preview(session, first),
+    }
+
+
+def _set_encoding(session: ImportSession, encoding: str | None) -> None:
+    if encoding:
+        session.text(encoding)
+    else:
+        session._text = None  # 自動判定に戻す
+        session.text(None)
+
+
+def preview(session: ImportSession, sheet: str | None, encoding: str | None = None) -> dict:
+    """読み込み設定の画面に出す、元の表のプレビュー（先頭と末尾の行。行番号付き）。
+
+    取り込むシートの選択や見出しの設定に誤りがあっても表示できるよう、表の組み立てとは切り離す。
+    """
+    if session.fmt == "xlsx":
+        names = session.workbook().sheetnames
+        sheet = sheet if sheet in names else names[0]
+    else:
+        sheet = None
+        _set_encoding(session, encoding)
+    grid = session.raw_grid(sheet)
+    numbered = list(enumerate(grid, start=1))
+    if len(numbered) > PREVIEW_ROWS + PREVIEW_TAIL_ROWS:
+        numbered = numbered[:PREVIEW_ROWS] + numbered[-PREVIEW_TAIL_ROWS:]
+    return {
+        "sheet": sheet,
+        "encoding": session.encoding,
+        "rows": [{"no": n, "cells": cells} for n, cells in numbered],
+        "total": len(grid),
+        "suggested_header_row": readers.suggest_header_row(grid),
     }
 
 
@@ -155,24 +192,29 @@ def _start(store: SessionStore, doc_id: int, filename: str, fmt: str, data: byte
 
 
 def apply_settings(
-    conn: sqlite3.Connection, session: ImportSession, encoding: str | None, header_row: int, sheets: list[str]
+    conn: sqlite3.Connection,
+    session: ImportSession,
+    encoding: str | None,
+    header_row: int,
+    sheets: list[str],
+    data_start: int | None = None,
+    data_end: int | None = None,
+    stop_at_blank: bool = False,
 ) -> dict:
     session.header_row = header_row
+    session.data_start, session.data_end, session.stop_at_blank = data_start, data_end, stop_at_blank
+    rng = {"data_start": data_start, "data_end": data_end, "stop_at_blank": stop_at_blank}
     if session.fmt == "xlsx":
         if not sheets:
             raise AppError("シートを 1 つ以上選択してください")
         session.sheets = sheets
-        tables = [(s, readers.build_table(session.raw_grid(s), header_row, s)) for s in sheets]
+        tables = [(s, readers.build_table(session.raw_grid(s), header_row, s, **rng)) for s in sheets]
         session.table = readers.merge_tables(tables)
         preview = session.raw_grid(sheets[0])[:PREVIEW_ROWS]
     else:
-        if encoding:
-            session.text(encoding)
-        else:
-            session._text = None  # 自動判定に戻す
-            session.text(None)
+        _set_encoding(session, encoding)
         grid = session.raw_grid(None)
-        session.table = readers.build_table(grid, header_row)
+        session.table = readers.build_table(grid, header_row, **rng)
         preview = grid[:PREVIEW_ROWS]
 
     doc = doc_svc.get_document(conn, session.document_id)
@@ -279,6 +321,9 @@ def build(conn: sqlite3.Connection, session: ImportSession, schema: dict) -> Bui
     for col in cols:
         src = col.get("source_header")
         col_index[col["key"]] = header_index.get(src) if src else None
+        if col is idc and col.get("auto_id"):
+            col_index[col["key"]] = None  # ファイルの列は使わず、行の順に番号を振る
+            continue
         if col_index[col["key"]] is None:
             if col is idc:
                 errors.add("ID 列がファイルのどの列にも対応付けられていません", column=col["name"])
@@ -312,7 +357,8 @@ def build(conn: sqlite3.Connection, session: ImportSession, schema: dict) -> Bui
     items: list[dict] = []
     seen: dict[str, str] = {}
     multi_sheet = len(session.sheets) > 1
-    for sheet, row_no, values in session.table.rows:
+    auto_id = idc.get("auto_id")
+    for n, (sheet, row_no, values) in enumerate(session.table.rows):
         loc = f"{sheet} {row_no}行目" if multi_sheet else f"{row_no}行目"
         data: dict[str, Any] = {}
         invalid: list[str] = []
@@ -333,6 +379,8 @@ def build(conn: sqlite3.Connection, session: ImportSession, schema: dict) -> Bui
                     if col["key"] not in invalid:
                         invalid.append(col["key"])
                     warnings.add(f"参照先に存在しない ID: {', '.join(missing)}", row=loc, column=col["name"])
+        if auto_id:
+            data[idc["key"]] = colschema.format_auto_id(auto_id, n)
         item_id = data.get(idc["key"])
         if item_id is None:
             errors.add("ID が空です", row=loc, column=idc["name"])
@@ -370,44 +418,18 @@ def commit(conn: sqlite3.Connection, session: ImportSession, schema: dict, label
     if not result.items:
         raise AppError("取り込む行がありません")
     doc_id = session.document_id
-    version_no = conn.execute(
-        "SELECT COALESCE(MAX(version_no), 0) + 1 FROM versions WHERE document_id = ?", (doc_id,)
-    ).fetchone()[0]
-    # 削除済みの版の番号も再利用しないよう、過去最大値を meta に残す
-    key = f"max_version_no:{doc_id}"
-    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
-    if row is not None:
-        version_no = max(version_no, int(row["value"]) + 1)
-    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (key, str(version_no)))
-
     settings = {
         "format": session.fmt,
         "encoding": session.encoding,
         "header_row": session.header_row,
+        "data_start": session.data_start,
+        "data_end": session.data_end,
+        "stop_at_blank": session.stop_at_blank,
         "sheets": session.sheets,
     }
-    schema_json = json.dumps(result.schema, ensure_ascii=False)
-    cur = conn.execute(
-        "INSERT INTO versions(document_id, version_no, label, source_filename, import_settings, schema_json, "
-        "row_count, imported_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (doc_id, version_no, label or "", session.filename, json.dumps(settings, ensure_ascii=False),
-         schema_json, len(result.items), now_iso()),
+    version_id = ver_svc.create_version(conn, doc_id, label, session.filename, settings, result.schema, result.items)
+    conn.execute(
+        "UPDATE documents SET schema_json = ? WHERE id = ?", (json.dumps(result.schema, ensure_ascii=False), doc_id)
     )
-    version_id = cur.lastrowid
-    conn.executemany(
-        "INSERT INTO items(version_id, item_id, row_no, data_json, invalid_json, content_hash) VALUES (?, ?, ?, ?, ?, ?)",
-        [
-            (
-                version_id,
-                it["item_id"],
-                n,
-                json.dumps(it["data"], ensure_ascii=False),
-                json.dumps(it["invalid"]),
-                colschema.content_hash(it["data"]),
-            )
-            for n, it in enumerate(result.items, start=1)
-        ],
-    )
-    conn.execute("UPDATE documents SET schema_json = ? WHERE id = ?", (schema_json, doc_id))
     link_svc.regenerate_auto_links(conn, doc_id)
     return version_id

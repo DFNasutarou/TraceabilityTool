@@ -1,7 +1,11 @@
 import { api, fmtValue, toast, STATUS_LABEL, ORIGIN_LABEL } from "../api.js";
 import { route, href, navigate, replaceQuery } from "../router.js";
+import { CellValue, ChoiceFilter, widthStyle, storedFlag } from "./cells.js";
+import ItemEditor from "./item-editor.js";
 
 const { ref, computed, watch, onMounted } = Vue;
+
+const PAGE_SIZE = 500;
 
 const TRACE_FILTERS = [
   ["", "すべて"],
@@ -12,6 +16,7 @@ const TRACE_FILTERS = [
 ];
 
 export default {
+  components: { CellValue, ChoiceFilter, ItemEditor },
   props: { docId: { type: Number, required: true } },
   setup(props) {
     const doc = ref(null);
@@ -26,9 +31,12 @@ export default {
     const trace = ref(route.query.trace || "");
     const invalidOnly = ref(false);
     const filters = ref({});
+    const choices = ref({}); // enum・bool の列: 列キー → 選んだ選択肢
+    const wrap = storedFlag("itemsWrap", false); // 長い値を折り返して全文を表示する
     const sort = ref("");
     const desc = ref(false);
     const page = ref(1);
+    const editing = ref(false); // 編集モード（最新版のみ）
 
     const columns = computed(() => result.value?.schema.columns || []);
     const isLatest = computed(() => result.value?.is_latest);
@@ -40,8 +48,9 @@ export default {
       const seq = ++loadSeq;
       loading.value = true;
       try {
-        const params = { q: q.value, trace: trace.value, sort: sort.value, desc: desc.value ? "true" : "", page: page.value, size: 100 };
+        const params = { q: q.value, trace: trace.value, sort: sort.value, desc: desc.value ? "true" : "", page: page.value, size: PAGE_SIZE };
         for (const [k, v] of Object.entries(filters.value)) if (v) params["f." + k] = v;
+        for (const [k, v] of Object.entries(choices.value)) if (v?.length) params["m." + k] = v;
         if (invalidOnly.value) params["f.__invalid"] = "1";
         const res = await api.get(`/api/versions/${versionId.value}/items`, params);
         // 後から出した要求の結果を、先に出した要求の遅れた応答で上書きしない
@@ -87,7 +96,7 @@ export default {
         load();
       }, 250);
     }
-    watch([q, filters], reloadSoon, { deep: true });
+    watch([q, filters, choices], reloadSoon, { deep: true });
     watch([trace, invalidOnly], () => {
       page.value = 1;
       replaceQuery({ trace: trace.value });
@@ -151,6 +160,19 @@ export default {
       await Promise.all([loadDetail(), load()]);
     }
 
+    function startEdit() {
+      selectItem("");
+      editing.value = true;
+    }
+    async function onEditClose(e) {
+      editing.value = false;
+      if (!e?.saved) return;
+      versions.value = await api.get(`/api/documents/${props.docId}/versions`);
+      doc.value = await api.get(`/api/documents/${props.docId}`);
+      if (route.query.version) replaceQuery({ version: "" }); // 最新版の表示に戻す（query の変更で読み直す）
+      else await load();
+    }
+
     function traceBadges(t) {
       if (!t) return [];
       const b = [];
@@ -162,8 +184,9 @@ export default {
     }
 
     return {
-      doc, versions, result, detail, loading, versionId, q, trace, invalidOnly, filters, sort, desc, page, pages,
+      doc, versions, result, detail, loading, versionId, q, trace, invalidOnly, filters, choices, wrap, sort, desc, page, pages, widthStyle,
       columns, isLatest, TRACE_FILTERS, STATUS_LABEL, ORIGIN_LABEL, search, route,
+      editing, startEdit, onEditClose,
       setSort, goPage, selectItem, changeVersion, findCandidates, addLink, removeLink, restoreLink, ackLink,
       traceBadges, fmtValue, href, navigate,
     };
@@ -173,26 +196,32 @@ export default {
       <div class="page-head">
         <h1>{{ doc.name }}</h1>
         <div class="actions">
-          <label class="inline">版
+          <button v-if="isLatest && !editing" class="btn primary" @click="startEdit" title="セルの修正、行・列の追加ができます">編集</button>
+          <label class="inline" v-if="!editing">版
             <select :value="versionId" @change="changeVersion">
               <option v-for="(v, i) in versions" :key="v.id" :value="v.id">v{{ v.version_no }} {{ v.label }}{{ i === 0 ? '（最新）' : '' }}</option>
             </select>
           </label>
-          <a class="btn" :href="href('/documents/' + docId + '/import')">取り込み</a>
-          <a class="btn" :href="href('/documents/' + docId + '/versions')">版・差分</a>
-          <a class="btn" :href="href('/documents/' + docId + '/settings')">設定</a>
+          <template v-if="!editing">
+            <a class="btn" :href="href('/documents/' + docId + '/import')">取り込み</a>
+            <a class="btn" :href="href('/documents/' + docId + '/versions')">版・差分</a>
+            <a class="btn" :href="href('/documents/' + docId + '/settings')">設定</a>
+          </template>
         </div>
       </div>
+
+      <ItemEditor v-if="editing" :doc-id="docId" @close="onEditClose" />
 
       <p v-if="!doc.latest_version_id" class="empty">まだ取り込まれていません。</p>
       <p v-else-if="result && !isLatest" class="notice">過去の版を表示しています（読み取り専用）。トレース情報は最新版でのみ表示します。</p>
 
-      <div class="toolbar" v-if="result">
+      <div class="toolbar" v-if="result && !editing">
         <input class="search" v-model="q" placeholder="全文検索（ID・全列）">
         <label class="inline" v-if="isLatest">トレース
           <select v-model="trace"><option v-for="[v, l] in TRACE_FILTERS" :key="v" :value="v">{{ l }}</option></select>
         </label>
         <label class="check"><input type="checkbox" v-model="invalidOnly"> 警告のある行のみ</label>
+        <label class="check" title="長い値を折り返して、全文を表示します"><input type="checkbox" v-model="wrap"> 折り返して全文を表示</label>
         <span class="spacer"></span>
         <span class="sub">{{ result.total }} 件</span>
         <button class="icon-btn" :disabled="page <= 1" @click="goPage(page - 1)">‹</button>
@@ -200,12 +229,12 @@ export default {
         <button class="icon-btn" :disabled="page >= pages" @click="goPage(page + 1)">›</button>
       </div>
 
-      <div class="split" v-if="result">
+      <div class="split" v-if="result && !editing">
         <div class="split-main scroll-both">
-          <table class="grid compact items-table">
+          <table class="grid compact items-table" :class="{wrap}">
             <thead>
               <tr>
-                <th v-for="c in columns" :key="c.key" class="sortable" @click="setSort(c.key)">
+                <th v-for="c in columns" :key="c.key" class="sortable" :style="widthStyle(c)" @click="setSort(c.key)">
                   {{ c.name }} <span v-if="sort === c.key">{{ desc ? '▼' : '▲' }}</span>
                 </th>
                 <template v-if="isLatest">
@@ -215,13 +244,16 @@ export default {
                 </template>
               </tr>
               <tr class="filter-row">
-                <th v-for="c in columns" :key="c.key"><input v-model="filters[c.key]" placeholder="絞り込み"></th>
+                <th v-for="c in columns" :key="c.key">
+                  <ChoiceFilter v-if="c.type === 'enum' || c.type === 'bool'" :col="c" v-model="choices[c.key]" />
+                  <input v-else v-model="filters[c.key]" placeholder="絞り込み">
+                </th>
                 <template v-if="isLatest"><th></th><th></th><th></th></template>
               </tr>
             </thead>
             <tbody>
               <tr v-for="it in result.items" :key="it.item_id" @click="selectItem(it.item_id)" :class="{selected: route.query.item === it.item_id}">
-                <td v-for="c in columns" :key="c.key" :class="{invalid: it.invalid.includes(c.key), idcell: c.type === 'id'}">{{ fmtValue(it.data[c.key], c) }}</td>
+                <td v-for="c in columns" :key="c.key" :style="widthStyle(c)" :class="{invalid: it.invalid.includes(c.key), idcell: c.type === 'id'}"><CellValue :value="it.data[c.key]" :col="c" /></td>
                 <template v-if="isLatest">
                   <td class="num">{{ result.has_upper ? it.trace?.upper_count : '-' }}</td>
                   <td class="num">{{ result.has_lower ? it.trace?.lower_count : '-' }}</td>

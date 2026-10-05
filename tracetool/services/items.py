@@ -10,6 +10,24 @@ from . import trace as trace_svc
 from . import versions as ver_svc
 
 TRACE_FILTERS = ("no_upper", "no_lower", "suspect", "broken")
+EMPTY = "__empty__"  # 選択式の絞り込みで「空欄」を表す値
+OTHER = "__other__"  # 選択式の絞り込みで「選択肢に無い値」を表す値
+
+
+def _choice_keys(col: dict, value) -> set[str]:
+    """選択式の絞り込み（enum・bool）で、セルの値が当てはまる選択肢。"""
+    if value is None or value == []:
+        return {EMPTY}
+    out: set[str] = set()
+    enum_values = col.get("enum_values") or []
+    for v in value if isinstance(value, list) else [value]:
+        if isinstance(v, bool):
+            out.add("true" if v else "false")
+        elif col["type"] == "enum" and v in enum_values:
+            out.add(str(v))
+        else:
+            out.add(OTHER)  # 選択肢に無い値・真偽のどちらでもない値
+    return out
 
 
 def _sort_key(value):
@@ -33,7 +51,9 @@ def query_items(
     trace: str | None = None,
     page: int = 1,
     size: int = 100,
+    choices: dict[str, list[str]] | None = None,
 ) -> dict:
+    """choices: 列キー → 選んだ選択肢（enum・bool の列の絞り込み。どれかに当てはまる項目を残す）。"""
     version = ver_svc.get_version(conn, version_id)
     latest = ver_svc.latest_version(conn, version["document_id"])
     is_latest = latest is not None and latest["id"] == version_id
@@ -57,6 +77,13 @@ def query_items(
             items = [i for i in items if i["invalid"]]
             continue
         items = [i for i in items if text in colschema.as_text(i["data"].get(key)).casefold()]
+    cols_by_key = {c["key"]: c for c in colschema.columns(version["schema"])}
+    for key, selected in (choices or {}).items():
+        col = cols_by_key.get(key)
+        if col is None or col["type"] not in ("enum", "bool") or not selected:
+            continue
+        wanted = set(selected)
+        items = [i for i in items if _choice_keys(col, i["data"].get(key)) & wanted]
     if trace in TRACE_FILTERS and is_latest:
         items = [i for i in items if i["trace"] and i["trace"][trace]]
 
@@ -78,7 +105,7 @@ def query_items(
     start = (page - 1) * size
     return {
         "version": {k: version[k] for k in ("id", "document_id", "version_no", "label", "imported_at")},
-        "schema": version["schema"],
+        "schema": display_schema(conn, version["document_id"], version["schema"]),
         "is_latest": is_latest,
         "has_upper": any(r["lower_doc_id"] == version["document_id"] for r in rels),
         "has_lower": any(r["upper_doc_id"] == version["document_id"] for r in rels),
@@ -154,9 +181,9 @@ def item_detail(conn: sqlite3.Connection, version_id: int, item_id: str) -> dict
 
 
 def display_schema(conn: sqlite3.Connection, doc_id: int, schema: dict) -> dict:
-    """表示用のカラム定義。版のカラム定義に、文書の作業中定義の重要度を重ねる。
+    """表示用のカラム定義。版のカラム定義に、文書の作業中定義の重要度・幅を重ねる。
 
-    重要度は表示だけに使う設定なので、取り込み直さなくても文書の設定画面での変更がすぐに表示に反映されるようにする。
+    重要度・幅は表示だけに使う設定なので、取り込み直さなくても文書の設定画面での変更がすぐに表示に反映されるようにする。
     """
     from . import documents as doc_svc
 
@@ -164,7 +191,14 @@ def display_schema(conn: sqlite3.Connection, doc_id: int, schema: dict) -> dict:
     cols = []
     for c in colschema.columns(schema):
         w = working.get(c["key"])
-        cols.append({**c, "importance": (w or c).get("importance") or "mid"})
+        src = w or c
+        cols.append(
+            {
+                **c,
+                "importance": src.get("importance") or colschema.DEFAULT_IMPORTANCE,
+                "width": src.get("width") or "auto",
+            }
+        )
     return {**schema, "columns": cols}
 
 
@@ -177,6 +211,7 @@ def latest_items(conn: sqlite3.Connection, doc_id: int) -> dict:
         raise AppError("まだ取り込まれていません")
     return {
         "version_id": latest["id"],
+        "version_no": latest["version_no"],
         "schema": display_schema(conn, doc_id, latest["schema"]),
         "items": [
             {"item_id": i["item_id"], "data": i["data"], "invalid": i["invalid"]}

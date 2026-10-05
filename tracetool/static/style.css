@@ -219,7 +219,6 @@ ul.links li.inactive > a, ul.links li.inactive > span:not(.link-actions) { opaci
 .side-card.broken { background: var(--err-bg); }
 .side-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .side-card-id { font-family: Consolas, "BIZ UDGothic", monospace; font-weight: 700; }
-.side-card .kv th { width: 30%; }
 
 .bulk-add { border: 1px dashed var(--line); border-radius: 6px; padding: 8px 12px; margin-top: 8px; }
 .bulk-add textarea { font-family: Consolas, "BIZ UDGothic", monospace; }
@@ -231,14 +230,100 @@ ul.links li.inactive > a, ul.links li.inactive > span:not(.link-actions) { opaci
 /* 文書一覧のトレース関係: 網羅率のバーは数値の下に小さく置き、表の幅を抑える */
 .relations-table .meter { display: block; width: 72px; margin: 2px 0 2px auto; }
 
-/* 横並び表示のカード: 列の重要度で表示を変える（低 = 小さく上部 / 高 = 大きく中央 / 中 = 普通の大きさで下部） */
-.side-card .kv { margin: 4px 0; }
-.side-card .kv.imp-low { font-size: 11.5px; color: var(--sub); }
-.side-card .kv.imp-low th { color: var(--sub); }
-.side-card .kv.imp-high { font-size: 16px; line-height: 1.5; padding: 4px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-.side-card .kv.imp-high th { font-size: 13px; }
-.side-card .kv.imp-high td { font-weight: 600; color: var(--text); }
-.side-card .kv.imp-mid { font-size: 13.5px; }
+/* 横並び表示のカード */
 .side-card.selectable { cursor: pointer; }
 .side-card.selectable:hover { border-color: var(--accent); }
 .side-more { display: block; width: 100%; margin: 4px 0 10px; text-align: center; }
+
+/* 取り込み: データの範囲の指定 */
+.raw .outside-row td { color: var(--sub); opacity: .55; }
+.raw .range-start td { border-top: 2px solid var(--ok); }
+.raw .range-end td { border-bottom: 2px solid var(--err); }
+.raw .gap-row td { text-align: center; color: var(--sub); background: var(--head); cursor: default; font-size: 12px; }
+.tabs .tab-label { padding: 6px 8px 6px 0; }
+.tiny { width: 64px; }
+
+/* ドラッグ＆ドロップでの並べ替え */
+.drag-handle { cursor: grab; color: var(--sub); padding: 0 4px; user-select: none; letter-spacing: -2px; }
+.drag-handle:active { cursor: grabbing; }
+.dragging { opacity: .4; }
+.drop-before > td, li.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+.drop-after > td, li.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
+
+/* enum の選択肢の編集 */
+.enum-editor { display: flex; flex-direction: column; gap: 4px; flex-basis: 100%; }
+.enum-values { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; }
+.enum-values li { display: flex; align-items: flex-start; gap: 4px; }
+.enum-values textarea { flex: 1; min-height: 26px; padding: 2px 6px; }
+.enum-add { display: flex; gap: 6px; align-items: flex-start; }
+.enum-add textarea { flex: 1; min-height: 26px; padding: 2px 6px; }
+.schema-editor .detail-cell input.tiny { width: 64px; }
+.schema-editor .detail-cell input.short { width: 90px; }
+.schema-editor .detail-cell label.inline { white-space: nowrap; }
+
+/* 項目一覧: 折り返して全文を表示 */
+.items-table.wrap td { white-space: pre-wrap; word-break: break-word; overflow: visible; }
+.items-table.wrap td.idcell { white-space: nowrap; }
+
+/* リスト形式の値: 1 つ目だけを表示し、‹ › で切り替える */
+.list-nav { display: inline-flex; align-items: center; margin-right: 4px; border: 1px solid var(--line); border-radius: 10px; font-size: 11px; line-height: 16px; vertical-align: 1px; background: var(--head); white-space: nowrap; }
+.list-btn { border: none; background: none; padding: 0 4px; cursor: pointer; color: var(--accent); font-size: 12px; line-height: 16px; }
+.list-btn:hover { background: var(--accent-weak); border-radius: 8px; }
+.list-pos { color: var(--sub); min-width: 26px; text-align: center; }
+
+/* 選択式の絞り込み（enum・bool） */
+.choice-filter { position: relative; }
+.choice-btn { width: 100%; min-width: 70px; text-align: left; font-size: 12px; font-weight: normal; padding: 2px 4px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.choice-btn.active { border-color: var(--accent); background: var(--accent-weak); color: var(--accent); }
+.choice-pop { position: absolute; top: 100%; left: 0; z-index: 20; min-width: 200px; max-height: 320px; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.18); padding: 6px 8px; display: flex; flex-direction: column; gap: 2px; font-weight: normal; }
+.choice-pop label.check { margin: 0; white-space: pre-wrap; }
+.choice-pop label.extra { color: var(--sub); }
+.choice-foot { display: flex; gap: 6px; justify-content: flex-end; border-top: 1px solid var(--line); padding-top: 6px; margin-top: 4px; }
+
+/* 横並び表示のカード: 列の幅に応じて欄を横に並べる（4 分割） */
+.field-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 10px; margin: 4px 0; }
+.field { min-width: 0; padding: 3px 0; border-bottom: 1px dotted var(--line); }
+.field.span-1 { grid-column: span 1; }
+.field.span-2 { grid-column: span 2; }
+.field.span-3 { grid-column: span 3; }
+.field.span-4 { grid-column: span 4; display: grid; grid-template-columns: 30% minmax(0, 1fr); gap: 6px; }
+.field-name { color: var(--sub); }
+.field:not(.span-4) .field-name { display: block; font-size: 11px; line-height: 1.3; }
+.field-value { display: block; min-width: 0; }
+.field-value.clip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.field-value.invalid { background: var(--warn-bg); color: var(--warn); }
+.field-grid.imp-low { font-size: 11.5px; color: var(--sub); }
+.field-grid.imp-high { font-size: 16px; line-height: 1.5; padding: 4px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.field-grid.imp-high .field-name { font-size: 13px; }
+.field-grid.imp-high .field-value { font-weight: 600; color: var(--text); }
+.field-grid.imp-mid { font-size: 13.5px; }
+
+/* 編集モード */
+.edit-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: var(--accent-weak); border: 1px solid var(--accent); border-radius: 6px; padding: 6px 10px; margin-bottom: 8px; }
+.edit-stats { font-size: 12px; }
+.edit-table td { cursor: text; }
+.edit-table td.locked { cursor: not-allowed; color: var(--sub); }
+.edit-table td.edited { background: var(--sel); }
+.edit-table td.editing { background: var(--panel); outline: 2px solid var(--accent); outline-offset: -2px; vertical-align: top; }
+.edit-table td.dup { background: var(--err-bg); color: var(--err); }
+.edit-table tr.added td { background: var(--ok-bg); }
+.edit-table tr.added td.editing { background: var(--panel); }
+.edit-table tr.deleted td { text-decoration: line-through; opacity: .5; }
+.edit-table tr.deleted td:last-child { text-decoration: none; opacity: 1; }
+.edit-table th.added-col { background: var(--ok-bg); }
+.edit-cell { display: flex; flex-direction: column; gap: 4px; min-width: 140px; }
+.edit-cell textarea { min-width: 160px; font-size: 13px; padding: 2px 4px; white-space: pre-wrap; }
+.edit-cell .edit-select { width: 100%; }
+.edit-checks { display: flex; flex-direction: column; gap: 2px; }
+.edit-checks label.check { margin: 0; white-space: pre-wrap; }
+.edit-checks label.unknown { color: var(--warn); }
+.edit-add-choice { display: flex; gap: 4px; flex-wrap: wrap; }
+.edit-add-choice input { flex: 1; min-width: 100px; }
+.add-col label.choices { display: flex; flex-direction: column; align-items: stretch; min-width: 220px; }
+.modal-back { position: fixed; inset: 0; background: rgba(0, 0, 0, .35); z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.modal { background: var(--panel); border-radius: 8px; padding: 16px 20px; width: min(560px, 100%); box-shadow: 0 8px 30px rgba(0,0,0,.25); display: flex; flex-direction: column; gap: 10px; }
+.modal h2 { margin: 0; }
+.radio-block { display: flex; gap: 8px; align-items: flex-start; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; cursor: pointer; }
+.radio-block:has(input:checked) { border-color: var(--accent); background: var(--accent-weak); }
+.radio-block input { margin-top: 4px; }
+.items-table.wrap td:not(.idcell) { min-width: 120px; }

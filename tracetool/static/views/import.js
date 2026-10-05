@@ -23,8 +23,12 @@ export default {
     // ステップ 2
     const encoding = ref("");
     const headerRow = ref(1);
+    const dataStart = ref(""); // 空ならヘッダ行の次
+    const endMode = ref("all"); // all: 最後まで / row: 指定した行まで / blank: 最初の空行まで
+    const dataEnd = ref("");
+    const clickMode = ref("header"); // プレビューの行を押したときに指定するもの
     const sheets = ref([]);
-    const preview = ref([]);
+    const preview = ref(null); // { sheet, rows: [{no, cells}], total, suggested_header_row }
     // ステップ 3
     const settings = ref(null);
     const model = ref(toEdit(null));
@@ -78,13 +82,69 @@ export default {
         model.value = toEdit(null); // 別のファイルを選び直したら、定義の案を作り直す
         encoding.value = "";
         headerRow.value = start.value.suggested_header_row || 1;
+        dataStart.value = "";
+        endMode.value = "all";
+        dataEnd.value = "";
+        clickMode.value = "header";
         sheets.value = start.value.sheets.slice(0, 1);
-        preview.value = start.value.preview;
+        preview.value = start.value.sheet_preview;
         step.value = 2;
       } finally {
         busy.value = false;
       }
     }
+
+    // プレビューは取り込みの設定とは別に読み込む（シートを切り替えたとき、設定に誤りがあっても表示できるように）
+    async function loadPreview(sheet) {
+      preview.value = await api.get(`/api/imports/${start.value.session_id}/preview`, {
+        sheet: sheet ?? preview.value?.sheet, encoding: encoding.value,
+      });
+    }
+
+    // 取り込むシートの選択を変えたら、選んだシートのプレビューに切り替える。
+    // 1 枚だけを選んでいる場合は、そのシートで見出しの行を推定し直す
+    async function onSheetToggle(e) {
+      const s = e.target.value;
+      if (e.target.checked) {
+        await loadPreview(s);
+        if (sheets.value.length === 1 && preview.value.suggested_header_row !== Number(headerRow.value)) {
+          headerRow.value = preview.value.suggested_header_row;
+          toast(`シート「${s}」の見出しの行を ${headerRow.value} 行目と推定しました`);
+        }
+      } else if (sheets.value.length && preview.value?.sheet === s) {
+        await loadPreview(sheets.value[0]);
+      }
+    }
+
+    function onPreviewRowClick(no) {
+      if (clickMode.value === "header") headerRow.value = no;
+      else if (clickMode.value === "start") dataStart.value = no;
+      else {
+        endMode.value = "row";
+        dataEnd.value = no;
+      }
+    }
+    const firstDataRow = computed(() => Number(dataStart.value) || Number(headerRow.value) + 1);
+    const lastDataRow = computed(() => (endMode.value === "row" && Number(dataEnd.value) ? Number(dataEnd.value) : Infinity));
+    function rowClass(no) {
+      return {
+        "header-row": no === Number(headerRow.value),
+        "outside-row": no !== Number(headerRow.value) && (no < firstDataRow.value || no > lastDataRow.value),
+        "range-start": no === firstDataRow.value,
+        "range-end": no === lastDataRow.value,
+      };
+    }
+    // プレビューの先頭と末尾の間で省略した行があれば、その位置に「…」の行を入れる
+    const previewRows = computed(() => {
+      const out = [];
+      let prev = 0;
+      for (const r of preview.value?.rows || []) {
+        if (r.no > prev + 1 && prev > 0) out.push({ gap: r.no - prev - 1, no: `gap${r.no}` });
+        out.push(r);
+        prev = r.no;
+      }
+      return out;
+    });
 
     async function applySettings() {
       busy.value = true;
@@ -93,8 +153,10 @@ export default {
           encoding: encoding.value || null,
           header_row: Number(headerRow.value),
           sheets: sheets.value,
+          data_start: Number(dataStart.value) || null,
+          data_end: endMode.value === "row" ? Number(dataEnd.value) || null : null,
+          stop_at_blank: endMode.value === "blank",
         });
-        preview.value = settings.value.preview;
         return true;
       } catch {
         return false;
@@ -130,7 +192,7 @@ export default {
 
     const unmapped = computed(() => {
       if (!settings.value) return [];
-      const used = new Set(model.value.columns.map((c) => c.source_header));
+      const used = new Set(model.value.columns.filter((c) => !(c.type === "id" && c.autoId)).map((c) => c.source_header));
       return settings.value.headers.filter((h) => !used.has(h));
     });
 
@@ -192,10 +254,11 @@ export default {
 
     const previewCols = computed(() => (validation.value ? validation.value.schema.columns : []));
     const canCommit = computed(() => validation.value && !dirty.value && validation.value.error_count === 0 && !busy.value);
-    const maxCols = computed(() => Math.max(0, ...preview.value.map((r) => r.length)));
+    const maxCols = computed(() => Math.max(0, ...(preview.value?.rows || []).map((r) => r.cells.length)));
 
     return {
       doc, documents, relations, step, busy, source, fileInput, pasteText, pasteFormat, start, encoding, headerRow, sheets, preview, settings, model,
+      dataStart, endMode, dataEnd, clickMode, previewRows, rowClass, loadPreview, onSheetToggle, onPreviewRowClick,
       validation, dirty, label, tab, unmapped, previewCols, canCommit, maxCols,
       upload, applySettings, loadValues, createRelation, toStep3, addColumnFor, addAllUnmapped, onSchemaChange, validate, commit, cancel,
       href, fmtValue,
@@ -248,30 +311,59 @@ export default {
         <div class="inline-form">
           <span><b>{{ start.filename }}</b>（{{ start.format.toUpperCase() }}）</span>
           <label v-if="start.format !== 'xlsx' && !start.filename.startsWith('貼り付けた')">文字コード
-            <select v-model="encoding" @change="applySettings">
-              <option value="">自動判定（{{ settings?.encoding || start.encoding }}）</option>
+            <select v-model="encoding" @change="loadPreview()">
+              <option value="">自動判定（{{ preview?.encoding || start.encoding }}）</option>
               <option value="utf-8-sig">UTF-8</option>
               <option value="cp932">Shift_JIS（CP932）</option>
             </select>
           </label>
+        </div>
+        <div class="inline-form">
           <label>ヘッダ行 <input type="number" min="1" class="short" v-model="headerRow"> 行目</label>
+          <label title="見出しとデータの間に説明の行などがある場合に指定します">データの開始行
+            <input type="number" min="1" class="short" v-model="dataStart" :placeholder="String(Number(headerRow) + 1)"> 行目
+          </label>
+          <label>データの終わり
+            <select v-model="endMode">
+              <option value="all">最後の行まで</option>
+              <option value="row">指定した行まで</option>
+              <option value="blank">最初の空行の手前まで</option>
+            </select>
+          </label>
+          <label v-if="endMode === 'row'"><input type="number" min="1" class="short" v-model="dataEnd"> 行目まで</label>
+          <span class="sub" v-if="endMode === 'blank'">表の下の注記などが、空行で表と区切られている場合に使います（複数シートではシートごとに判定します）</span>
         </div>
         <div v-if="start.sheets.length" class="sheet-select">
           <span>取り込むシート（複数選択すると行を連結します。ヘッダは同じである必要があります）:</span>
-          <label v-for="s in start.sheets" :key="s" class="check"><input type="checkbox" :value="s" v-model="sheets" @change="sheets.length && applySettings()"> {{ s }}</label>
+          <label v-for="s in start.sheets" :key="s" class="check"><input type="checkbox" :value="s" v-model="sheets" @change="onSheetToggle"> {{ s }}</label>
         </div>
-        <p class="hint">
-          プレビュー（先頭 {{ preview.length }} 行）。色の付いた行がヘッダ行（見出し）です。
+        <div v-if="start.sheets.length > 1" class="tabs">
+          <span class="sub tab-label">プレビューするシート:</span>
+          <button v-for="s in start.sheets" :key="s" :class="{active: preview?.sheet === s}" @click="loadPreview(s)">
+            {{ s }}<span v-if="!sheets.includes(s)" class="sub">（取り込まない）</span>
+          </button>
+        </div>
+        <div class="inline-form">
+          <span class="sub">プレビューの行を押して指定:</span>
+          <label class="check"><input type="radio" value="header" v-model="clickMode"> ヘッダ行</label>
+          <label class="check"><input type="radio" value="start" v-model="clickMode"> データの開始行</label>
+          <label class="check"><input type="radio" value="end" v-model="clickMode"> データの終了行</label>
+        </div>
+        <p class="hint" v-if="preview">
+          プレビュー（全 {{ preview.total }} 行<template v-if="preview.total > preview.rows.length">。先頭と末尾の行だけを表示しています</template>）。
+          色の付いた行がヘッダ行、灰色の行は取り込まない行です。
           <template v-if="start.suggested_header_row > 1">見出しの行を自動で推定し、{{ start.suggested_header_row }} 行目にしました。</template>
-          違う場合は、見出しの行をクリックして指定してください。
         </p>
-        <div class="scroll-x">
+        <div class="scroll-x" v-if="preview">
           <table class="grid compact raw">
             <tbody>
-              <tr v-for="(row, i) in preview" :key="i" :class="{'header-row': i + 1 === Number(headerRow)}" @click="headerRow = i + 1" title="クリックでヘッダ行に指定">
-                <th class="rownum">{{ i + 1 }}</th>
-                <td v-for="c in maxCols" :key="c">{{ row[c - 1] }}</td>
-              </tr>
+              <template v-for="row in previewRows" :key="row.no">
+                <tr v-if="row.gap" class="gap-row"><td :colspan="maxCols + 1">… {{ row.gap }} 行を省略 …</td></tr>
+                <tr v-else :class="rowClass(row.no)" @click="onPreviewRowClick(row.no)" title="クリックで指定">
+                  <th class="rownum">{{ row.no }}</th>
+                  <td v-for="c in maxCols" :key="c">{{ row.cells[c - 1] }}</td>
+                </tr>
+              </template>
             </tbody>
           </table>
         </div>

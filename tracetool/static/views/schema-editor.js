@@ -2,9 +2,13 @@
 // 編集用のモデル（toEdit で作る）を直接書き換える。保存時は fromEdit で API の形に戻す。
 
 import { TYPE_LABEL, toast } from "../api.js";
+import { dragSort, moveItem } from "../dragsort.js";
 
 const DEFAULT_TRUE = ["○", "◯", "〇", "Yes", "Y", "TRUE", "1", "有", "あり"];
 const DEFAULT_FALSE = ["×", "✕", "✖", "No", "N", "FALSE", "0", "無", "なし"];
+
+export const IMPORTANCE_LABEL = { low: "低", mid: "中", high: "高" };
+export const WIDTH_LABEL = { auto: "自動", s: "小", m: "中", l: "大", full: "全幅" };
 
 function newKey() {
   return "c" + Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -35,13 +39,24 @@ function lines(text) {
   return text.split("\n").map((s) => s.trim()).filter(Boolean);
 }
 
+function autoIdToEdit(a) {
+  return { autoId: !!a, autoPrefix: a?.prefix ?? "", autoDigits: a?.digits ?? 3, autoStart: a?.start ?? 1 };
+}
+
+export function formatAutoId(c, n) {
+  const num = String(Number(c.autoStart || 0) + n).padStart(Number(c.autoDigits) || 1, "0");
+  return (c.autoPrefix || "") + num;
+}
+
 export function newColumn(name = "", sourceHeader = null, type = "string") {
   return {
     key: newKey(), name, source_header: sourceHeader, type,
-    listEnabled: false, delimText: ";", delimNewline: false, delimTab: false, enumText: "",
+    listEnabled: false, delimText: ";", delimNewline: false, delimTab: false, enumValues: [],
     trueText: DEFAULT_TRUE.join("\n"), falseText: DEFAULT_FALSE.join("\n"),
     ref_document_id: "",
-    importance: "mid",
+    importance: "low",
+    width: "auto",
+    ...autoIdToEdit(null),
   };
 }
 
@@ -55,11 +70,13 @@ export function toEdit(schema) {
       type: c.type,
       listEnabled: !!c.list,
       ...(c.list ? delimsToEdit(c.list.delimiters) : { delimText: ";", delimNewline: false, delimTab: false }),
-      enumText: (c.enum_values || []).join("\n"),
+      enumValues: [...(c.enum_values || [])],
       trueText: (c.bool_values?.true || DEFAULT_TRUE).join("\n"),
       falseText: (c.bool_values?.false || DEFAULT_FALSE).join("\n"),
       ref_document_id: c.ref_document_id || "",
-      importance: c.importance || "mid",
+      importance: c.importance || "low",
+      width: c.width || "auto",
+      ...autoIdToEdit(c.auto_id),
     })),
   };
 }
@@ -70,19 +87,74 @@ export function fromEdit(model) {
     columns: model.columns.map((c) => ({
       key: c.key,
       name: c.name.trim(),
-      source_header: c.source_header || null,
+      source_header: c.type === "id" && c.autoId ? null : c.source_header || null,
       type: c.type,
       list: c.listEnabled && c.type !== "id" ? { delimiters: editToDelims(c) } : null,
-      enum_values: c.type === "enum" ? lines(c.enumText) : null,
+      enum_values: c.type === "enum" ? c.enumValues.map((v) => v.trim()).filter(Boolean) : null,
       bool_values: c.type === "bool" ? { true: lines(c.trueText), false: lines(c.falseText) } : null,
       ref_document_id: c.type === "string" && c.ref_document_id ? Number(c.ref_document_id) : null,
-      importance: c.importance || "mid",
+      importance: c.importance || "low",
+      width: c.width || "auto",
+      auto_id: c.type === "id" && c.autoId
+        ? { prefix: c.autoPrefix, digits: Number(c.autoDigits) || 3, start: Number(c.autoStart) || 0 }
+        : null,
     })),
   };
 }
 
+// enum の選択肢の編集。1 つずつ別の欄にするので、改行を含む値もそのまま選択肢にできる。
+// 並べ替えはドラッグ＆ドロップで行う
+export const EnumValuesEditor = {
+  props: { values: { type: Array, required: true } },
+  emits: ["change"],
+  setup(props, { emit }) {
+    const addText = Vue.ref("");
+    const sorter = dragSort((from, to) => {
+      moveItem(props.values, from, to);
+      emit("change");
+    });
+    function add() {
+      // 複数行を貼り付けた場合は 1 行ずつ別の選択肢にする
+      const existing = new Set(props.values);
+      const added = lines(addText.value).filter((v) => !existing.has(v) && existing.add(v));
+      if (!added.length) return;
+      props.values.push(...added);
+      addText.value = "";
+      emit("change");
+    }
+    function remove(i) {
+      props.values.splice(i, 1);
+      emit("change");
+    }
+    function update(i, e) {
+      props.values[i] = e.target.value;
+      emit("change");
+    }
+    const rows = (v) => Math.min(6, v.split("\n").length);
+    return { addText, sorter, add, remove, update, rows };
+  },
+  template: `
+    <div class="enum-editor">
+      <span class="sub">選択肢（{{ values.length }} 個。⋮⋮ をドラッグして並べ替え）</span>
+      <ul class="enum-values">
+        <li v-for="(v, i) in values" :key="i" :draggable="sorter.state.armed === i" :class="sorter.rowClass(i)"
+            @dragstart="sorter.start(i, $event)" @dragover="sorter.over(i, $event)" @drop="sorter.drop(i, $event)" @dragend="sorter.end()">
+          <span class="drag-handle" title="ドラッグして並べ替え" @mousedown="sorter.arm(i)" @mouseup="sorter.end()">⋮⋮</span>
+          <textarea :rows="rows(v)" :value="v" @change="update(i, $event)" :title="v.includes('\\n') ? '改行を含む選択肢です' : ''"></textarea>
+          <button class="icon-btn" title="この選択肢を削除" @click="remove(i)">×</button>
+        </li>
+      </ul>
+      <div class="enum-add">
+        <textarea rows="1" v-model="addText" placeholder="追加する選択肢（複数行を貼り付けると 1 行ずつ追加）"></textarea>
+        <button class="btn small" :disabled="!addText.trim()" @click="add">追加</button>
+      </div>
+    </div>
+  `,
+};
+
 export default {
   name: "SchemaEditor",
+  components: { EnumValuesEditor },
   props: {
     model: { type: Object, required: true },
     documents: { type: Array, default: () => [] },
@@ -146,12 +218,15 @@ export default {
       changed();
     }
     function move(i, d) {
-      const cols = props.model.columns;
       const j = i + d;
-      if (j < 0 || j >= cols.length) return;
-      [cols[i], cols[j]] = [cols[j], cols[i]];
+      if (j < 0 || j >= props.model.columns.length) return;
+      moveItem(props.model.columns, i, j);
       changed();
     }
+    const sorter = dragSort((from, to) => {
+      moveItem(props.model.columns, from, to);
+      changed();
+    });
     function onTypeChange(col) {
       if (col.type === "id") {
         // ID 列は 1 つだけ。他の ID 列は文字列に戻す
@@ -184,10 +259,16 @@ export default {
           return;
         }
         // 確認ダイアログは出さず、結果を通知する（選択肢は欄で確認・修正でき、型も戻せる）
-        toast(`「${col.name}」列を enum にしました（${values.length} 種類の値を、ファイルに出てきた順に選択肢にしました。順番や内容は選択肢の欄で直せます）`);
+        let msg = `「${col.name}」列を enum にしました（${values.length} 種類の値を、ファイルに出てきた順に選択肢にしました。順番や内容は選択肢の欄で直せます）`;
+        const multiline = values.filter((v) => v.includes("\n")).length;
+        if (multiline && !(col.listEnabled && col.delimNewline)) {
+          msg += `\n改行を含む値が ${multiline} 種類あり、改行を含んだまま 1 つの選択肢にしました。` +
+            "1 つのセルに複数の値を改行で区切って書いている場合は、「リスト形式」の「改行」にチェックしてから作り直してください。";
+        }
+        toast(msg);
         col.type = "enum";
         col.ref_document_id = "";
-        col.enumText = values.join("\n");
+        col.enumValues = values;
         changed();
       } catch {
         // エラーは api.js がトースト表示する
@@ -195,13 +276,18 @@ export default {
         loadingValues.value = null;
       }
     }
-    const headerUsed = (h, col) => props.model.columns.some((c) => c !== col && c.source_header === h);
-    const missing = (col) => props.headers && (!col.source_header || !props.headers.includes(col.source_header));
+    // ファイルの列の選択肢: どの列にも対応付けていない列を上に、他の列で使っている列を下にまとめる
+    const usedBy = (h, col) => props.model.columns.find((c) => c !== col && c.source_header === h && !(c.type === "id" && c.autoId));
+    const freeHeaders = (col) => props.headers.filter((h) => !usedBy(h, col));
+    const usedHeaders = (col) => props.headers.filter((h) => usedBy(h, col));
+    const missing = (col) =>
+      props.headers && !(col.type === "id" && col.autoId) && (!col.source_header || !props.headers.includes(col.source_header));
 
     return {
-      types, add, remove, move, onTypeChange, otherDocs, headerUsed, missing, changed,
+      types, add, remove, move, sorter, onTypeChange, otherDocs, usedBy, freeHeaders, usedHeaders, missing, changed,
       bulkOpen, bulkText, bulkDelim, bulkCustom, bulkPreview, addBulk,
-      docName, hasRelation, createRelation, loadingValues, toEnum,
+      docName, hasRelation, createRelation, loadingValues, toEnum, formatAutoId,
+      IMPORTANCE_LABEL, WIDTH_LABEL,
     };
   },
   template: `
@@ -209,7 +295,7 @@ export default {
       <table class="grid compact">
         <thead>
           <tr>
-            <th style="width:56px">順序</th>
+            <th style="width:76px" title="⋮⋮ をドラッグするか、↑↓ で並べ替えます">順序</th>
             <th class="col-name">列名</th>
             <th v-if="headers" class="col-src">ファイルの列</th>
             <th class="col-type">型</th>
@@ -218,16 +304,25 @@ export default {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="(col, i) in model.columns" :key="col.key" :class="{'row-missing': missing(col)}">
+          <tr v-for="(col, i) in model.columns" :key="col.key" :class="[{'row-missing': missing(col)}, sorter.rowClass(i)]"
+              :draggable="sorter.state.armed === i" @dragstart="sorter.start(i, $event)" @dragover="sorter.over(i, $event)"
+              @drop="sorter.drop(i, $event)" @dragend="sorter.end()">
             <td class="nowrap">
+              <span class="drag-handle" title="ドラッグして並べ替え" @mousedown="sorter.arm(i)" @mouseup="sorter.end()">⋮⋮</span>
               <button class="icon-btn" title="上へ" @click="move(i, -1)" :disabled="i === 0">↑</button>
               <button class="icon-btn" title="下へ" @click="move(i, 1)" :disabled="i === model.columns.length - 1">↓</button>
             </td>
             <td><input v-model="col.name" @input="changed" placeholder="列名"></td>
             <td v-if="headers">
-              <select v-model="col.source_header" @change="changed">
+              <select v-if="col.type === 'id' && col.autoId" disabled><option>（自動で振る）</option></select>
+              <select v-else v-model="col.source_header" @change="changed">
                 <option :value="null">（ファイルに無い）</option>
-                <option v-for="h in headers" :key="h" :value="h">{{ h }}{{ headerUsed(h, col) ? '（他の列で使用中）' : '' }}</option>
+                <optgroup v-if="freeHeaders(col).length" label="ファイルの列">
+                  <option v-for="h in freeHeaders(col)" :key="h" :value="h">{{ h }}</option>
+                </optgroup>
+                <optgroup v-if="usedHeaders(col).length" label="他の列に対応付け済み">
+                  <option v-for="h in usedHeaders(col)" :key="h" :value="h">{{ h }}（「{{ usedBy(h, col).name }}」で使用中）</option>
+                </optgroup>
               </select>
             </td>
             <td>
@@ -236,12 +331,30 @@ export default {
               </select>
             </td>
             <td class="detail-cell">
+              <template v-if="col.type === 'id'">
+                <label class="check" title="ファイルに ID の列が無い場合に、行の順に「接頭辞 + 連番」の ID を振ります">
+                  <input type="checkbox" v-model="col.autoId" @change="changed"> ID を自動で振る
+                </label>
+                <template v-if="col.autoId">
+                  <label class="inline">接頭辞 <input class="short" v-model="col.autoPrefix" @input="changed" placeholder="例: REQ-"></label>
+                  <label class="inline">桁数 <input type="number" min="1" max="10" class="tiny" v-model="col.autoDigits" @input="changed"></label>
+                  <label class="inline">開始番号 <input type="number" min="0" class="tiny" v-model="col.autoStart" @input="changed"></label>
+                  <span class="sub">例: {{ formatAutoId(col, 0) }}, {{ formatAutoId(col, 1) }}, …</span>
+                  <div class="relation-warn">
+                    取り込むたびに、データの行の順に番号を振り直します。行を挿入・削除した表を取り込み直すと、同じ行でも ID が変わり、リンクがずれます。
+                  </div>
+                </template>
+              </template>
               <label v-if="col.type !== 'id'" class="inline" title="横並び表示での表示のしかた（低: 小さく上部 / 高: 大きく中央 / 中: 普通の大きさで下部）">
                 重要度
                 <select v-model="col.importance" @change="changed" class="importance">
-                  <option value="low">低</option>
-                  <option value="mid">中</option>
-                  <option value="high">高</option>
+                  <option v-for="(l, v) in IMPORTANCE_LABEL" :key="v" :value="v">{{ l }}</option>
+                </select>
+              </label>
+              <label class="inline" title="項目一覧での列の幅と、横並び表示での欄の幅（小・中の列は横に並べて表示します）">
+                幅
+                <select v-model="col.width" @change="changed">
+                  <option v-for="(l, v) in WIDTH_LABEL" :key="v" :value="v">{{ l }}</option>
                 </select>
               </label>
               <label v-if="col.type !== 'id'" class="check">
@@ -269,10 +382,7 @@ export default {
                 </template>
                 <template v-else>文書を作成した後、「{{ docName(col.ref_document_id) }}」との間にトレース関係を登録してください。</template>
               </div>
-              <div v-if="col.type === 'enum'" class="stack">
-                <span class="sub">選択肢（1 行に 1 つ）</span>
-                <textarea rows="3" v-model="col.enumText" @input="changed"></textarea>
-              </div>
+              <EnumValuesEditor v-if="col.type === 'enum'" :values="col.enumValues" @change="changed" />
               <button v-if="loadValues && (col.type === 'string' || col.type === 'enum') && !col.ref_document_id"
                       class="btn small" :disabled="loadingValues === col.key" @click="toEnum(col)"
                       title="この列で実際に使われている値だけを選択肢にして、enum に変換します">

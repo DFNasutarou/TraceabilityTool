@@ -50,9 +50,14 @@ def decode_text(data: bytes, encoding: str | None) -> tuple[str, str]:
     raise AppError("文字コードを判定できませんでした（UTF-8 / Shift_JIS 以外の可能性があります）")
 
 
+def _newlines(text: str) -> str:
+    """セル内の改行を LF にそろえる（Windows で作った CSV は CRLF になるため。enum の選択肢との比較で区別しない）。"""
+    return text.replace("\r\n", "\n").replace("\r", "\n") if "\r" in text else text
+
+
 def read_delimited(text: str, delimiter: str) -> list[list[str]]:
     reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter)
-    return [list(r) for r in reader]
+    return [[_newlines(c) for c in r] for r in reader]
 
 
 def cell_to_str(value) -> str:
@@ -70,7 +75,7 @@ def cell_to_str(value) -> str:
         return value.isoformat(sep=" ", timespec="seconds")
     if isinstance(value, (dt.date, dt.time)):
         return value.isoformat()
-    return str(value)
+    return _newlines(str(value))
 
 
 def open_workbook(data: bytes):
@@ -130,10 +135,27 @@ def suggest_header_row(grid: list[list[str]], scan_rows: int = 30) -> int:
     return best_row
 
 
-def build_table(grid: list[list[str]], header_row: int, sheet_name: str = "") -> Table:
-    """header_row は 1 始まり。"""
+def build_table(
+    grid: list[list[str]],
+    header_row: int,
+    sheet_name: str = "",
+    data_start: int | None = None,
+    data_end: int | None = None,
+    stop_at_blank: bool = False,
+) -> Table:
+    """行番号はすべて 1 始まり。
+
+    data_start: データの最初の行（省略時はヘッダ行の次）。見出しとデータの間に説明の行がある帳票用。
+    data_end: データの最後の行（省略時は最後まで）。表の下に注記などがある帳票用。
+    stop_at_blank: データの途中で空行が現れたら、そこで終わりとみなす（シートごとに表の長さが違う場合用）。
+    """
     if header_row < 1:
         raise AppError("ヘッダ行は 1 以上を指定してください")
+    start = data_start if data_start else header_row + 1
+    if start <= header_row:
+        raise AppError(f"データの開始行（{start} 行目）はヘッダ行（{header_row} 行目）より後にしてください")
+    if data_end and data_end < start:
+        raise AppError(f"データの終了行（{data_end} 行目）が開始行（{start} 行目）より前です")
     if header_row > len(grid):
         raise AppError(f"ヘッダ行 {header_row} 行目がありません（全 {len(grid)} 行）")
     headers = [h.strip() for h in grid[header_row - 1]]
@@ -155,10 +177,16 @@ def build_table(grid: list[list[str]], header_row: int, sheet_name: str = "") ->
         headers[i] = name
     table = Table(headers=headers)
     width = len(headers)
-    for idx in range(header_row, len(grid)):
+    end = min(len(grid), data_end) if data_end else len(grid)
+    started = False
+    for idx in range(start - 1, end):
         values = (grid[idx] + [""] * width)[:width]
         if all(v.strip() == "" for v in values):
+            # 先頭側の空行は読み飛ばし、データが始まった後の空行で終える
+            if stop_at_blank and started:
+                break
             continue
+        started = True
         table.rows.append((sheet_name, idx + 1, values))
     return table
 

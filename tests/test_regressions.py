@@ -485,10 +485,10 @@ def test_column_importance_and_latest_items(client):
     do_import(client, req, "req.csv", req_csv())
     do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)
 
-    # 既定は mid
+    # 既定は low
     items = ok(client.get(f"/api/documents/{req}/latest-items"))
     assert [i["item_id"] for i in items["items"]] == ["REQ-001", "REQ-002", "REQ-003"]
-    assert {c["importance"] for c in items["schema"]["columns"]} == {"mid"}
+    assert {c["importance"] for c in items["schema"]["columns"]} == {"low"}
 
     # 文書の設定で重要度を変えると、取り込み直さなくても表示に反映される
     d = ok(client.get(f"/api/documents/{req}"))
@@ -502,7 +502,7 @@ def test_column_importance_and_latest_items(client):
     up_imp = {c["key"]: c["importance"] for c in n["upper"][0]["schema"]["columns"]}
     assert up_imp["rname"] == "high"
 
-    # 不正な値は mid にそろえる
+    # 不正な値は既定（low）にそろえる
     d["schema"]["columns"][1]["importance"] = "super"
     ok(client.put(f"/api/documents/{req}", json={"name": d["name"], "schema": d["schema"]}))
-    assert ok(client.get(f"/api/documents/{req}"))["schema"]["columns"][1]["importance"] == "mid"
+    assert ok(client.get(f"/api/documents/{req}"))["schema"]["columns"][1]["importance"] == "low"

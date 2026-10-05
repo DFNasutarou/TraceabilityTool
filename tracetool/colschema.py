@@ -11,6 +11,9 @@ from typing import Any
 
 COLUMN_TYPES = ("id", "int", "string", "enum", "bool")
 IMPORTANCE = ("low", "mid", "high")
+DEFAULT_IMPORTANCE = "low"
+WIDTHS = ("auto", "s", "m", "l", "full")
+MAX_AUTO_ID_DIGITS = 10
 
 DEFAULT_BOOL_TRUE = ["○", "◯", "〇", "Yes", "Y", "TRUE", "1", "有", "あり"]
 DEFAULT_BOOL_FALSE = ["×", "✕", "✖", "No", "N", "FALSE", "0", "無", "なし"]
@@ -64,8 +67,13 @@ def normalize_schema(schema: dict) -> dict:
             "bool_values": None,
             "ref_document_id": None,
             # 横並び表示での重要度（low: 小さく上部 / mid: 普通の大きさで下部 / high: 大きく中央）
-            "importance": raw.get("importance") if raw.get("importance") in IMPORTANCE else "mid",
+            "importance": raw.get("importance") if raw.get("importance") in IMPORTANCE else DEFAULT_IMPORTANCE,
+            # 表示の幅（一覧表示の列幅と、横並び表示のカード内での幅）。auto は従来どおり
+            "width": raw.get("width") if raw.get("width") in WIDTHS else "auto",
+            "auto_id": None,
         }
+        if col["type"] == "id" and raw.get("auto_id"):
+            col["auto_id"] = normalize_auto_id(raw["auto_id"])
         lst = raw.get("list")
         if lst and lst.get("delimiters"):
             col["list"] = {"delimiters": [d for d in lst["delimiters"] if d != ""]}
@@ -81,6 +89,27 @@ def normalize_schema(schema: dict) -> dict:
             col["ref_document_id"] = int(raw["ref_document_id"])
         out_cols.append(col)
     return {"columns": out_cols, "display_column": schema.get("display_column")}
+
+
+def normalize_auto_id(raw: dict) -> dict:
+    """ID の自動採番の設定（接頭辞 + 連番）。"""
+
+    def num(key, default, lo, hi):
+        try:
+            return min(hi, max(lo, int(raw.get(key, default))))
+        except (TypeError, ValueError):
+            return default
+
+    return {
+        "prefix": str(raw.get("prefix") or "").strip(),
+        "digits": num("digits", 3, 1, MAX_AUTO_ID_DIGITS),
+        "start": num("start", 1, 0, 10**MAX_AUTO_ID_DIGITS - 1),
+    }
+
+
+def format_auto_id(auto: dict, n: int) -> str:
+    """n 番目（0 始まり）の行の ID。"""
+    return f"{auto['prefix']}{auto['start'] + n:0{auto['digits']}d}"
 
 
 def validate_schema(schema: dict) -> list[str]:
@@ -176,6 +205,44 @@ def normalize_cell(col: dict, raw: str | None) -> tuple[Any, bool]:
             invalid = invalid or bad
         return (values or None), invalid
     return _convert_scalar(col, text)
+
+
+def _normalize_edited_scalar(col: dict, value: Any) -> tuple[Any, bool]:
+    if isinstance(value, bool):
+        if col["type"] == "bool":
+            return value, False
+        value = as_text(value)
+    elif isinstance(value, (int, float)):
+        if col["type"] == "int" and float(value).is_integer():
+            return int(value), False
+        value = str(value)
+    text = str(value).replace("\r\n", "\n").strip()
+    if text == "":
+        return None, False
+    if col["type"] in ("id", "string"):
+        return text, False
+    return _convert_scalar(col, text)
+
+
+def normalize_edited(col: dict, value: Any) -> tuple[Any, bool]:
+    """画面で編集した値を保存用の値に変換する。戻り値は (値, 警告か)。
+
+    bool 列の真偽値・番号列の数値・リスト形式の配列はそのまま受け取り、文字列は取り込みと同じ規則で変換する。
+    """
+    if value is None:
+        return None, False
+    if col.get("list") and col["type"] != "id":
+        parts = value if isinstance(value, list) else split_list(str(value), col["list"]["delimiters"])
+        values, invalid = [], False
+        for p in parts:
+            v, bad = _normalize_edited_scalar(col, p)
+            if v is not None:
+                values.append(v)
+                invalid = invalid or bad
+        return (values or None), invalid
+    if isinstance(value, list):
+        value = "\n".join(as_text(v) for v in value)
+    return _normalize_edited_scalar(col, value)
 
 
 MAX_ENUM_VALUES = 300

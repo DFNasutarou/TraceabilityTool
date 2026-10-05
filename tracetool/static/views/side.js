@@ -1,9 +1,11 @@
 // 横並び表示: 上位の項目 ｜ この文書の項目（全件を順番どおりに縦に並べる） ｜ 下位の項目
 // 中央の列で項目を選ぶと、左右の列がその項目の上位・下位に切り替わる。
 // カードの中は列の重要度で分ける: 低 = 小さく上部 / 高 = 大きく中央 / 中 = 普通の大きさで下部。
+// 各段の中では、列の幅の設定に応じて欄を横に並べる（小 = 1/4、中 = 1/2、大 = 3/4、自動・全幅 = 1 行）。
 
-import { api, fmtValue, STATUS_LABEL, ORIGIN_LABEL } from "../api.js";
+import { api, STATUS_LABEL, ORIGIN_LABEL } from "../api.js";
 import { route, href, navigate } from "../router.js";
+import { CellValue, WIDTH_SPAN, storedFlag } from "./cells.js";
 
 const { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } = Vue;
 
@@ -11,17 +13,19 @@ const { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } = Vue;
 const WINDOW = 100;
 
 function fieldsBy(schema, importance) {
-  return schema.columns.filter((c) => c.type !== "id" && (c.importance || "mid") === importance);
+  return schema.columns.filter((c) => c.type !== "id" && (c.importance || "low") === importance);
 }
 
 // 1 項目分のカード（ID と全列の値。重要度ごとに 3 段）
 const ItemCard = {
+  components: { CellValue },
   props: {
     docId: { type: Number, required: true },
     schema: { type: Object, required: true },
     entry: { type: Object, required: true }, // { item_id, data, invalid, status?, origin? }
     current: { type: Boolean, default: false },
     selectable: { type: Boolean, default: false }, // 中央の列: 押すとその項目を選ぶ
+    wrap: { type: Boolean, default: true }, // 長い値を折り返して全文を表示する
   },
   emits: ["select"],
   setup(props) {
@@ -30,7 +34,8 @@ const ItemCard = {
       ["high", fieldsBy(props.schema, "high")],
       ["mid", fieldsBy(props.schema, "mid")],
     ].filter(([, cols]) => cols.length));
-    return { groups, fmtValue, href, STATUS_LABEL, ORIGIN_LABEL };
+    const span = (c) => WIDTH_SPAN[c.width] || 4;
+    return { groups, span, href, STATUS_LABEL, ORIGIN_LABEL };
   },
   template: `
     <div class="side-card" :class="{current, broken: !entry.data, selectable}" @click="selectable && $emit('select', entry.item_id)">
@@ -44,12 +49,12 @@ const ItemCard = {
       </div>
       <p v-if="!entry.data" class="err-text small">最新版に存在しない ID です（リンク切れ）。</p>
       <template v-else>
-        <table v-for="[imp, cols] in groups" :key="imp" class="kv" :class="'imp-' + imp">
-          <tr v-for="c in cols" :key="c.key">
-            <th>{{ c.name }}</th>
-            <td class="pre" :class="{invalid: entry.invalid.includes(c.key)}">{{ fmtValue(entry.data[c.key], c) }}</td>
-          </tr>
-        </table>
+        <div v-for="[imp, cols] in groups" :key="imp" class="field-grid" :class="'imp-' + imp">
+          <div v-for="c in cols" :key="c.key" class="field" :class="'span-' + span(c)">
+            <span class="field-name">{{ c.name }}</span>
+            <span class="field-value" :class="[wrap ? 'pre' : 'clip', {invalid: entry.invalid.includes(c.key)}]"><CellValue :value="entry.data[c.key]" :col="c" /></span>
+          </div>
+        </div>
       </template>
     </div>
   `,
@@ -63,6 +68,7 @@ export default {
     const view = ref(null); // 選んだ項目の上位・下位
     const range = ref([0, 0]); // 中央の列で描画している範囲 [開始, 終了)
     const listEl = ref(null);
+    const wrap = storedFlag("sideWrap", true);
 
     const selectedId = computed(() => route.query.item || all.value?.items[0]?.item_id);
     const selectedIndex = computed(() => (all.value ? all.value.items.findIndex((i) => i.item_id === selectedId.value) : -1));
@@ -129,7 +135,7 @@ export default {
 
     const count = (groups) => groups.reduce((n, g) => n + g.items.length, 0);
 
-    return { all, view, range, visible, listEl, selectedId, selectedIndex, prevId, nextId, select, showMore, count, href };
+    return { all, view, range, visible, listEl, wrap, selectedId, selectedIndex, prevId, nextId, select, showMore, count, href };
   },
   template: `
     <section class="page side-page" v-if="all">
@@ -137,6 +143,7 @@ export default {
         <h1>{{ view ? view.document.name : '' }}: {{ selectedId }}</h1>
         <div class="actions">
           <button class="btn" :disabled="!prevId" @click="select(prevId, true)" title="前の項目（Alt + ←）">‹ 前の項目</button>
+          <label class="check" title="長い値を折り返して全文を表示します。外すと 1 行に収まる分だけ表示します"><input type="checkbox" v-model="wrap"> 折り返して全文を表示</label>
           <span class="sub">{{ selectedIndex + 1 }} / {{ all.items.length }}</span>
           <button class="btn" :disabled="!nextId" @click="select(nextId, true)" title="次の項目（Alt + →）">次の項目 ›</button>
           <a class="btn" :href="href('/documents/' + docId + '/items', {item: selectedId})">項目一覧に戻る</a>
@@ -151,7 +158,7 @@ export default {
             <div v-for="g in view.upper" :key="g.relation_id" class="side-group">
               <h3>{{ g.document.name }}</h3>
               <p v-if="!g.items.length" class="warn-text small">リンクがありません（上位なし）</p>
-              <ItemCard v-for="e in g.items" :key="e.link_id" :doc-id="g.document.id" :schema="g.schema" :entry="e" />
+              <ItemCard v-for="e in g.items" :key="e.link_id" :doc-id="g.document.id" :schema="g.schema" :entry="e" :wrap="wrap" />
             </div>
           </div>
         </div>
@@ -161,7 +168,7 @@ export default {
           <div class="side-scroll" ref="listEl">
             <button v-if="range[0] > 0" class="btn small side-more" @click="showMore(-1)">前の項目を表示（あと {{ range[0] }} 件）</button>
             <ItemCard v-for="e in visible" :key="e.item_id" :doc-id="docId" :schema="all.schema" :entry="e"
-                      :current="e.item_id === selectedId" selectable @select="select" />
+                      :current="e.item_id === selectedId" selectable :wrap="wrap" @select="select" />
             <button v-if="range[1] < all.items.length" class="btn small side-more" @click="showMore(1)">次の項目を表示（あと {{ all.items.length - range[1] }} 件）</button>
           </div>
         </div>
@@ -173,7 +180,7 @@ export default {
             <div v-for="g in view.lower" :key="g.relation_id" class="side-group">
               <h3>{{ g.document.name }}</h3>
               <p v-if="!g.items.length" class="warn-text small">リンクがありません（下位なし）</p>
-              <ItemCard v-for="e in g.items" :key="e.link_id" :doc-id="g.document.id" :schema="g.schema" :entry="e" />
+              <ItemCard v-for="e in g.items" :key="e.link_id" :doc-id="g.document.id" :schema="g.schema" :entry="e" :wrap="wrap" />
             </div>
           </div>
         </div>

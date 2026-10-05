@@ -55,7 +55,10 @@ export function query(params) {
   if (!params) return "";
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== null && v !== "") q.append(k, v);
+    // 配列は同じ名前で複数回送る（m.<列キー>=a&m.<列キー>=b）
+    for (const x of Array.isArray(v) ? v : [v]) {
+      if (x !== undefined && x !== null && x !== "") q.append(k, x);
+    }
   }
   const s = q.toString();
   return s ? "?" + s : "";
