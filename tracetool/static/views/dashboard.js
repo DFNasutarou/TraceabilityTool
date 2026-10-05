@@ -36,8 +36,16 @@ export default {
       load();
     }
 
+    const dataDir = ref("");
     onMounted(load);
-    return { docs, relations, newRel, loading, loaded, addRelation, deleteRelation, href, fmtDate, fmtPct, download };
+    onMounted(async () => {
+      dataDir.value = (await api.get("/api/info")).data_dir || "";
+    });
+    async function openDataDir() {
+      await api.post("/api/open-data-dir");
+      toast(`保存先フォルダを開きました: ${dataDir.value}`);
+    }
+    return { dataDir, openDataDir, docs, relations, newRel, loading, loaded, addRelation, deleteRelation, href, fmtDate, fmtPct, download };
   },
   template: `
     <section class="page">
@@ -142,6 +150,12 @@ export default {
           <select v-model="newRel.lower"><option value="">選択…</option><option v-for="d in docs" :key="d.id" :value="d.id" :disabled="d.id === newRel.upper">{{ d.name }}</option></select>
         </label>
         <button class="btn primary" :disabled="!newRel.upper || !newRel.lower" @click="addRelation">関係を追加</button>
+      </div>
+
+      <div v-if="dataDir" class="data-dir">
+        <span class="sub">データの保存先（ツールのフォルダとは別の場所です。ツールを差し替えてもデータは残ります）:</span>
+        <code>{{ dataDir }}</code>
+        <button class="btn small" @click="openDataDir">フォルダを開く</button>
       </div>
     </section>
   `,

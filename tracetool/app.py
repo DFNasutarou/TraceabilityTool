@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import importer
+from . import importer, opener
 from .db import Database
 from .errors import AppError
 from .services import diff as diff_svc
@@ -141,8 +141,11 @@ def _log_unexpected(request: Request, exc: BaseException) -> None:
     log.error("unexpected error: %s %s %s at %s", request.method, request.url.path, type(exc).__name__, where)
 
 
-def create_app(db: Database, port: int | None = None, extra_hosts: tuple[str, ...] = ()) -> FastAPI:
-    """port: 待ち受けポート（Origin の検査に使う）。extra_hosts: テスト用に許可する Host 名。"""
+def create_app(
+    db: Database, port: int | None = None, extra_hosts: tuple[str, ...] = (), data_dir: Path | None = None
+) -> FastAPI:
+    """port: 待ち受けポート（Origin の検査に使う）。extra_hosts: テスト用に許可する Host 名。
+    data_dir: データフォルダ（画面に表示し、「保存先フォルダを開く」で開く）。"""
     app = FastAPI(title="トレーサビリティツール", docs_url=None, redoc_url=None, openapi_url=None)
     sessions = importer.SessionStore()
     sessions.start_reaper()
@@ -187,6 +190,19 @@ def create_app(db: Database, port: int | None = None, extra_hosts: tuple[str, ..
         # 入力値そのものは返さず、項目名だけ伝える
         fields = sorted({".".join(str(p) for p in e.get("loc", ()) if p != "body") for e in exc.errors()})
         return _error("入力が不正です: " + ", ".join(f or "(本文)" for f in fields), "invalid_request", 422)
+
+    # --- ツールの情報 ---------------------------------------------------------
+
+    @app.get("/api/info")
+    def info():
+        return {"data_dir": str(data_dir) if data_dir else None}
+
+    @app.post("/api/open-data-dir")
+    def open_data_dir():
+        if data_dir is None:
+            raise AppError("データフォルダが設定されていません")
+        opener.open_folder(data_dir)
+        return {"data_dir": str(data_dir)}
 
     # --- 文書 ---------------------------------------------------------------
 

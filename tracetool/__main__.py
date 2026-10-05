@@ -79,7 +79,7 @@ def main() -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
     setup_logging(data_dir)
     db = Database(data_dir / "tracetool.db")
-    app = create_app(db, port=args.port)
+    app = create_app(db, port=args.port, data_dir=data_dir)
 
     url = f"http://{HOST}:{args.port}/"
     print(f"データフォルダ: {data_dir}")

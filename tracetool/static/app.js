@@ -1,4 +1,4 @@
-import { toasts } from "./api.js";
+import { api, toast, toasts } from "./api.js";
 import { route, href } from "./router.js";
 import Dashboard from "./views/dashboard.js";
 import DocSettings from "./views/docsettings.js";
@@ -8,7 +8,7 @@ import VersionsView from "./views/versions.js";
 import TraceView from "./views/trace.js";
 import SideView from "./views/side.js";
 
-const { createApp, computed } = Vue;
+const { createApp, computed, ref, onMounted } = Vue;
 
 const App = {
   components: { Dashboard, DocSettings, ImportWizard, ItemsView, VersionsView, TraceView, SideView },
@@ -26,7 +26,17 @@ const App = {
     });
     // 画面を切り替えたときに状態を作り直すためのキー
     const viewKey = computed(() => route.path);
-    return { view, viewKey, toasts, href, route };
+
+    // データの保存先（ツールのフォルダとは別の場所。ツールを差し替えてもデータは残る）
+    const dataDir = ref("");
+    onMounted(async () => {
+      dataDir.value = (await api.get("/api/info")).data_dir || "";
+    });
+    async function openDataDir() {
+      await api.post("/api/open-data-dir");
+      toast(`保存先フォルダを開きました: ${dataDir.value}`);
+    }
+    return { view, viewKey, toasts, href, route, dataDir, openDataDir };
   },
   template: `
     <header class="topbar">
@@ -35,6 +45,10 @@ const App = {
         <a :href="href('/')" :class="{active: route.parts.length === 0}">文書一覧</a>
         <a :href="href('/trace')" :class="{active: route.parts[0] === 'trace'}">トレース状況</a>
       </nav>
+      <span class="spacer"></span>
+      <button v-if="dataDir" class="btn small data-dir-btn" @click="openDataDir" :title="'データの保存先: ' + dataDir">
+        保存先フォルダを開く
+      </button>
     </header>
     <main class="main">
       <component :is="view.name" v-bind="view.props" :key="viewKey" />

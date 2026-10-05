@@ -506,3 +506,33 @@ def test_column_importance_and_latest_items(client):
     d["schema"]["columns"][1]["importance"] = "super"
     ok(client.put(f"/api/documents/{req}", json={"name": d["name"], "schema": d["schema"]}))
     assert ok(client.get(f"/api/documents/{req}"))["schema"]["columns"][1]["importance"] == "low"
+
+
+# --- データの保存先 -------------------------------------------------------------------
+
+
+def test_info_and_open_data_dir(db, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from tracetool import opener
+    from tracetool.app import create_app
+
+    opened = []
+    monkeypatch.setattr(opener, "open_folder", lambda p: opened.append(p))
+    c = TestClient(create_app(db, extra_hosts=("testserver",), data_dir=tmp_path))
+    assert c.get("/api/info").json() == {"data_dir": str(tmp_path)}
+    assert c.post("/api/open-data-dir").status_code == 200
+    assert opened == [tmp_path]
+    # 他のサイトからは開かせない
+    r = c.post("/api/open-data-dir", headers={"Origin": "http://evil.example"})
+    assert r.status_code == 403 and len(opened) == 1
+
+
+def test_open_folder_missing(tmp_path):
+    import pytest
+
+    from tracetool import opener
+    from tracetool.errors import AppError
+
+    with pytest.raises(AppError, match="フォルダがありません"):
+        opener.open_folder(tmp_path / "none")

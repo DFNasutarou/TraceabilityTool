@@ -198,12 +198,14 @@ API-28,API,GET /documents/{id}/latest-items,横並び表示の中央の列・編
 API-29,API,表示用のカラム定義,横並び表示・項目一覧に返すカラム定義は、版のカラム定義に、文書の作業中カラム定義の重要度と幅を列キーで重ねたもの（表示だけの設定なので、取り込み直さなくても反映する）。neighborhood・latest-items・versions/{vid}/items で使う。,tracetool/services/items.py,F-66;F-67
 API-30,API,POST /documents/{id}/edit,"編集モードの保存（PRC-28）。本文: base_version_id、base_stamp（latest-items の stamp）、mode（new / overwrite）、schema、items（[{orig_id: 編集を始めたときの ID（追加した行は null）, data: {列キー: 値}}]。並び順のとおりに保存）、label。応答: version_id、version_no、mode、renamed（付け直した ID の数）。",tracetool/app.py;tracetool/services/editing.py,F-80;F-82
 API-31,API,POST /documents/{id}/rename-impact,"ID を付け直すと変わるもの（PRC-30）。本文: renames（{古い ID: 新しい ID}）。応答: links（[{document, count}]）、documents（[{document, version_no, count, items（先頭 20 件）}]）。読み取りのみ。",tracetool/app.py;tracetool/services/editing.py;tracetool/services/renaming.py,F-83
+API-32,API,GET /info、POST /open-data-dir,GET /info: データフォルダのパスを返す。POST /open-data-dir: データフォルダを OS のファイル管理画面で開く（Windows: os.startfile、macOS: open、Linux: xdg-open）。開くのは起動時に決まったデータフォルダだけで、画面から渡された値は使わない（127.0.0.1 だけで待ち受けるため、サーバの PC = 画面を操作している PC）。状態を変える要求と同じく Origin の検査を受ける。開けない場合はパスを添えたエラーにする。,tracetool/app.py;tracetool/opener.py;tracetool/__main__.py,F-24;N-03
 UI-01,画面,共通,"ハッシュ形式のルーティング（#/documents/3/items など）で、1 枚の HTML 内で画面を切り替える。エラーは画面右下にトースト表示する。文言はすべて日本語。
 出力ボタンは、ファイルを取得してからブラウザに保存させ、「作成しています」「ダウンロードしました: ファイル名」を通知する（失敗したらエラーを通知する）。表が画面に収まらない場合は、その枠の中だけで横スクロールする（ページ全体ははみ出さない）。
 通知は同時に 4 件までとし、古いものから消す。出力の「作成しています」は結果の通知に置き換える。リスト形式の値は、その列の区切り文字（改行・タブ・空白以外の最初のもの）で区切って表示する。",tracetool/static/app.js;tracetool/static/router.js;tracetool/static/api.js;tracetool/static/style.css,N-05;F-70;F-71
 UI-02,画面,S1 ダッシュボード,"文書の一覧（最新版、項目数、上位なし・下位なし・要確認・リンク切れの件数。件数をクリックすると S4 を絞り込んで開く）。
 トレース関係を「上位 → 下位」の一覧で表示し、各関係の網羅率を表示する。関係の追加・削除と、全関係の未トレース一覧の出力（Excel / CSV）もこの画面で行う。
-初回の読み込みが終わるまでは「読み込み中…」と表示し、「文書がありません」「関係がありません」を出さない。トレース関係の表は関係名を 1 列にまとめ、関係名を押すとトレース状況を開く（狭い画面でもはみ出しにくくする）。文書が 2 つ未満のときは、2 つ以上登録すると関係を登録できることを案内する。",tracetool/static/views/dashboard.js,F-60;F-51;F-40;F-71
+初回の読み込みが終わるまでは「読み込み中…」と表示し、「文書がありません」「関係がありません」を出さない。トレース関係の表は関係名を 1 列にまとめ、関係名を押すとトレース状況を開く（狭い画面でもはみ出しにくくする）。文書が 2 つ未満のときは、2 つ以上登録すると関係を登録できることを案内する。
+上部の帯の右端に「保存先フォルダを開く」ボタン（パスはボタンの説明に出す）を置き、文書一覧の下部にデータの保存先のパスと「フォルダを開く」ボタン、ツールを差し替えてもデータが残ることを示す。",tracetool/static/views/dashboard.js;tracetool/static/app.js,F-60;F-51;F-40;F-71;F-24
 UI-03,画面,S2 文書の設定,"名前・説明。カラム定義の編集（列の追加・削除・並べ替え（⋮⋮ のつまみをドラッグ＆ドロップ、または ↑↓）、型、リスト形式と区切り文字、enum の選択肢、bool の真偽文字列、参照先文書、表示列）。文書の削除。
 詳細設定の内容が増えても、列名の入力欄は幅を固定して縮めない。
 各列に横並び表示での重要度（低・中・高。既定は低）と、表示の幅（自動・小・中・大・全幅）を選ぶ欄を置く。

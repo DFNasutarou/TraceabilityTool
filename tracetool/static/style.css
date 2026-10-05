@@ -331,3 +331,8 @@ ul.links li.inactive > a, ul.links li.inactive > span:not(.link-actions) { opaci
 .rename-box { border: 1px solid var(--warn); background: var(--warn-bg); border-radius: 6px; padding: 8px 10px; max-height: 260px; overflow-y: auto; }
 .rename-box p, .rename-box ul { margin: 4px 0; }
 .rename-list { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+
+/* データの保存先 */
+.topbar .spacer { flex: 1; }
+.data-dir { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 24px; padding-top: 12px; border-top: 1px solid var(--line); }
+.data-dir code { font-family: Consolas, "BIZ UDGothic", monospace; background: var(--head); padding: 2px 6px; border-radius: 4px; word-break: break-all; }
