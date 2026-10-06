@@ -3,12 +3,13 @@
 
 import { TYPE_LABEL, toast } from "../api.js";
 import { dragSort, moveItem } from "../dragsort.js";
+import { FieldGrid } from "./cells.js";
 
 const DEFAULT_TRUE = ["○", "◯", "〇", "Yes", "Y", "TRUE", "1", "有", "あり"];
 const DEFAULT_FALSE = ["×", "✕", "✖", "No", "N", "FALSE", "0", "無", "なし"];
 
 export const IMPORTANCE_LABEL = { low: "低", mid: "中", high: "高" };
-export const WIDTH_LABEL = { auto: "自動", s: "小", m: "中", l: "大", full: "全幅" };
+export const WIDTH_LABEL = { auto: "自動", s: "小（1 行に 4 個）", m: "中（1 行に 3 個）", l: "大（1 行に 2 個）", full: "全幅" };
 
 function newKey() {
   return "c" + Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -56,6 +57,7 @@ export function newColumn(name = "", sourceHeader = null, type = "string") {
     ref_document_id: "",
     importance: "low",
     width: "auto",
+    labelBreak: false,
     ...autoIdToEdit(null),
   };
 }
@@ -76,6 +78,7 @@ export function toEdit(schema) {
       ref_document_id: c.ref_document_id || "",
       importance: c.importance || "low",
       width: c.width || "auto",
+      labelBreak: !!c.label_break,
       ...autoIdToEdit(c.auto_id),
     })),
   };
@@ -95,6 +98,7 @@ export function fromEdit(model) {
       ref_document_id: c.type === "string" && c.ref_document_id ? Number(c.ref_document_id) : null,
       importance: c.importance || "low",
       width: c.width || "auto",
+      label_break: !!c.labelBreak,
       auto_id: c.type === "id" && c.autoId
         ? { prefix: c.autoPrefix, digits: Number(c.autoDigits) || 3, start: Number(c.autoStart) || 0 }
         : null,
@@ -154,7 +158,7 @@ export const EnumValuesEditor = {
 
 export default {
   name: "SchemaEditor",
-  components: { EnumValuesEditor },
+  components: { EnumValuesEditor, FieldGrid },
   props: {
     model: { type: Object, required: true },
     documents: { type: Array, default: () => [] },
@@ -163,6 +167,8 @@ export default {
     relations: { type: Array, default: () => [] }, // トレース関係の一覧（参照 ID 列の確認に使う）
     // 列に使われている値を返す関数（col → Promise<string[]>）。指定すると「値から enum を作る」ボタンを出す
     loadValues: { type: Function, default: null },
+    // レイアウトのプレビューに使う項目の値（{列キー: 値}）。無ければ「（列名の値）」と表示する
+    sample: { type: Object, default: null },
   },
   emits: ["change", "create-relation"],
   setup(props, { emit }) {
@@ -280,6 +286,14 @@ export default {
     const usedBy = (h, col) => props.model.columns.find((c) => c !== col && c.source_header === h && !(c.type === "id" && c.autoId));
     const freeHeaders = (col) => props.headers.filter((h) => !usedBy(h, col));
     const usedHeaders = (col) => props.headers.filter((h) => usedBy(h, col));
+    // レイアウトのプレビュー（横並び表示のカードと同じ見た目）
+    const previewOpen = Vue.ref(true);
+    const previewCols = Vue.computed(() => fromEdit(props.model).columns);
+    const previewId = Vue.computed(() => {
+      const idc = props.model.columns.find((c) => c.type === "id");
+      const v = idc && props.sample?.[idc.key];
+      return v ?? (idc?.autoId ? formatAutoId(idc, 0) : "（ID）");
+    });
     const missing = (col) =>
       props.headers && !(col.type === "id" && col.autoId) && (!col.source_header || !props.headers.includes(col.source_header));
 
@@ -287,11 +301,21 @@ export default {
       types, add, remove, move, sorter, onTypeChange, otherDocs, usedBy, freeHeaders, usedHeaders, missing, changed,
       bulkOpen, bulkText, bulkDelim, bulkCustom, bulkPreview, addBulk,
       docName, hasRelation, createRelation, loadingValues, toEnum, formatAutoId,
-      IMPORTANCE_LABEL, WIDTH_LABEL,
+      IMPORTANCE_LABEL, WIDTH_LABEL, previewOpen, previewCols, previewId,
     };
   },
   template: `
     <div class="schema-editor">
+      <div class="layout-preview">
+        <button class="btn small" @click="previewOpen = !previewOpen">{{ previewOpen ? '▾' : '▸' }} レイアウトのプレビュー（横並び表示のカード）</button>
+        <template v-if="previewOpen">
+          <p class="sub">列の並び順・重要度・幅・列名の後の改行が反映されます。{{ sample ? '値は実際の項目の 1 つ目です。' : '' }}カードの幅は画面の幅によって変わります。</p>
+          <div class="side-card preview-card">
+            <div class="side-card-head"><span class="side-card-id">{{ previewId }}</span></div>
+            <FieldGrid :columns="previewCols" :data="sample || {}" placeholder />
+          </div>
+        </template>
+      </div>
       <table class="grid compact">
         <thead>
           <tr>
@@ -356,6 +380,9 @@ export default {
                 <select v-model="col.width" @change="changed">
                   <option v-for="(l, v) in WIDTH_LABEL" :key="v" :value="v">{{ l }}</option>
                 </select>
+              </label>
+              <label v-if="col.type !== 'id'" class="check" title="横並び表示で、列名の下に値を置きます。外すと列名を左に置き、長い列名は途中で省略します">
+                <input type="checkbox" v-model="col.labelBreak" @change="changed"> 列名の後で改行
               </label>
               <label v-if="col.type !== 'id'" class="check">
                 <input type="checkbox" v-model="col.listEnabled" @change="changed"> リスト形式

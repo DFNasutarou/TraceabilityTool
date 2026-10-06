@@ -1,24 +1,20 @@
 // 横並び表示: 上位の項目 ｜ この文書の項目（全件を順番どおりに縦に並べる） ｜ 下位の項目
 // 中央の列で項目を選ぶと、左右の列がその項目の上位・下位に切り替わる。
-// カードの中は列の重要度で分ける: 低 = 小さく上部 / 高 = 大きく中央 / 中 = 普通の大きさで下部。
-// 各段の中では、列の幅の設定に応じて欄を横に並べる（小 = 1/4、中 = 1/2、大 = 3/4、自動・全幅 = 1 行）。
+// カードの中は、カラム定義の並び順のとおりに、列の幅に応じて欄を横に並べる
+// （1 行に 小 = 4 個、中 = 3 個、大 = 2 個、自動・全幅 = 1 個）。重要度で文字の大きさを変える（低 = 小さく / 中 = 普通 / 高 = 大きく太字）。
 
 import { api, STATUS_LABEL, ORIGIN_LABEL } from "../api.js";
 import { route, href, navigate } from "../router.js";
-import { CellValue, WIDTH_SPAN, storedFlag } from "./cells.js";
+import { FieldGrid, storedFlag } from "./cells.js";
 
 const { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } = Vue;
 
 // 一度に描画する件数（項目が多い文書でも重くならないよう、選んだ項目の前後だけを描画し、スクロールで広げる）
 const WINDOW = 100;
 
-function fieldsBy(schema, importance) {
-  return schema.columns.filter((c) => c.type !== "id" && (c.importance || "low") === importance);
-}
-
-// 1 項目分のカード（ID と全列の値。重要度ごとに 3 段）
+// 1 項目分のカード（ID と全列の値）
 const ItemCard = {
-  components: { CellValue },
+  components: { FieldGrid },
   props: {
     docId: { type: Number, required: true },
     schema: { type: Object, required: true },
@@ -28,14 +24,8 @@ const ItemCard = {
     wrap: { type: Boolean, default: true }, // 長い値を折り返して全文を表示する
   },
   emits: ["select"],
-  setup(props) {
-    const groups = computed(() => [
-      ["low", fieldsBy(props.schema, "low")],
-      ["high", fieldsBy(props.schema, "high")],
-      ["mid", fieldsBy(props.schema, "mid")],
-    ].filter(([, cols]) => cols.length));
-    const span = (c) => WIDTH_SPAN[c.width] || 4;
-    return { groups, span, href, STATUS_LABEL, ORIGIN_LABEL };
+  setup() {
+    return { href, STATUS_LABEL, ORIGIN_LABEL };
   },
   template: `
     <div class="side-card" :class="{current, broken: !entry.data, selectable}" @click="selectable && $emit('select', entry.item_id)">
@@ -48,14 +38,7 @@ const ItemCard = {
         <span v-if="entry.origin" class="sub">{{ ORIGIN_LABEL[entry.origin] }}</span>
       </div>
       <p v-if="!entry.data" class="err-text small">最新版に存在しない ID です（リンク切れ）。</p>
-      <template v-else>
-        <div v-for="[imp, cols] in groups" :key="imp" class="field-grid" :class="'imp-' + imp">
-          <div v-for="c in cols" :key="c.key" class="field" :class="'span-' + span(c)">
-            <span class="field-name">{{ c.name }}</span>
-            <span class="field-value" :class="[wrap ? 'pre' : 'clip', {invalid: entry.invalid.includes(c.key)}]"><CellValue :value="entry.data[c.key]" :col="c" /></span>
-          </div>
-        </div>
-      </template>
+      <FieldGrid v-else :columns="schema.columns" :data="entry.data" :invalid="entry.invalid" :wrap="wrap" />
     </div>
   `,
 };

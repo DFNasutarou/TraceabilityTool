@@ -4,33 +4,106 @@ import { fmtValue } from "../api.js";
 
 const { ref, computed, watch, onMounted, onBeforeUnmount } = Vue;
 
-// セルの値。リスト形式で値が 2 つ以上ある場合は 1 つ目だけを表示し、‹ › で 2 つ目以降に切り替える
+// リスト形式の値の切り替え（‹ 1/3 ›）。値の位置（idx）は親が持つ
+export const ListNav = {
+  props: {
+    count: { type: Number, required: true },
+    idx: { type: Number, required: true },
+    title: { type: String, default: "" },
+  },
+  emits: ["step"],
+  template: `
+    <span class="list-nav" @click.stop :title="title">
+      <button class="list-btn" @click.stop="$emit('step', -1)" aria-label="前の値">‹</button><span class="list-pos">{{ idx + 1 }}/{{ count }}</span><button class="list-btn" @click.stop="$emit('step', 1)" aria-label="次の値">›</button>
+    </span>
+  `,
+};
+
+// リスト形式で値が 2 つ以上ある場合に、1 つ目だけを表示して ‹ › で切り替えるための状態
+function useListValue(valueRef, colRef) {
+  const idx = ref(0);
+  const isMulti = computed(() => Array.isArray(valueRef()) && valueRef().length > 1);
+  watch(valueRef, () => (idx.value = 0));
+  const text = computed(() => {
+    const v = valueRef();
+    return isMulti.value ? fmtValue(v[Math.min(idx.value, v.length - 1)]) : fmtValue(v, colRef());
+  });
+  const all = computed(() => (isMulti.value ? `全 ${valueRef().length} 件: ` + fmtValue(valueRef(), colRef()) : ""));
+  function step(d) {
+    const n = valueRef().length;
+    idx.value = (idx.value + d + n) % n;
+  }
+  return { idx, isMulti, text, all, step };
+}
+
+// セルの値（項目一覧・編集）。リスト形式で値が 2 つ以上ある場合は 1 つ目だけを表示し、末尾の ‹ › で切り替える
 export const CellValue = {
+  components: { ListNav },
   props: {
     value: { default: null },
     col: { type: Object, default: null },
   },
   setup(props) {
-    const idx = ref(0);
-    const isMulti = computed(() => Array.isArray(props.value) && props.value.length > 1);
-    watch(() => props.value, () => (idx.value = 0));
-    const text = computed(() =>
-      isMulti.value ? fmtValue(props.value[Math.min(idx.value, props.value.length - 1)]) : fmtValue(props.value, props.col)
-    );
-    function step(d) {
-      const n = props.value.length;
-      idx.value = (idx.value + d + n) % n;
-    }
-    const all = computed(() => (isMulti.value ? fmtValue(props.value, props.col) : ""));
-    return { idx, isMulti, text, step, all };
+    return useListValue(() => props.value, () => props.col);
   },
   template: `
-    <span v-if="isMulti" class="list-value">
-      <span class="list-nav" @click.stop :title="'全 ' + value.length + ' 件: ' + all">
-        <button class="list-btn" @click.stop="step(-1)" aria-label="前の値">‹</button><span class="list-pos">{{ idx + 1 }}/{{ value.length }}</span><button class="list-btn" @click.stop="step(1)" aria-label="次の値">›</button>
-      </span><span class="list-text">{{ text }}</span>
-    </span>
+    <span v-if="isMulti" class="list-value"><span class="list-text">{{ text }}</span><ListNav :count="value.length" :idx="idx" :title="all" @step="step" /></span>
     <template v-else>{{ text }}</template>
+  `,
+};
+
+// 横並び表示のカードの 1 つの欄（列名と値）。
+// 列名の後で改行する列は、列名の行に ‹ › を置く。改行しない列は、列名を左に置き（長ければ省略）、‹ › を値の末尾に置く
+const FieldItem = {
+  components: { ListNav },
+  props: {
+    col: { type: Object, required: true },
+    value: { default: null },
+    invalid: { type: Boolean, default: false },
+    wrap: { type: Boolean, default: true },
+    placeholder: { type: String, default: "" }, // 値が無いときに薄く表示する文字（レイアウトのプレビュー用）
+  },
+  setup(props) {
+    return { ...useListValue(() => props.value, () => props.col), span: computed(() => WIDTH_SPAN[props.col.width] || 12) };
+  },
+  template: `
+    <div class="field" :class="['span-' + span, 'imp-' + (col.importance || 'low'), col.label_break ? 'break' : 'inline']">
+      <template v-if="col.label_break">
+        <div class="field-head"><span class="field-name" :title="col.name">{{ col.name }}</span><ListNav v-if="isMulti" :count="value.length" :idx="idx" :title="all" @step="step" /></div>
+        <div class="field-value" :class="[wrap ? 'pre' : 'clip', {invalid}]">
+          <template v-if="text">{{ text }}</template><span v-else-if="placeholder" class="placeholder">{{ placeholder }}</span>
+        </div>
+      </template>
+      <template v-else>
+        <span class="field-name" :title="col.name">{{ col.name }}</span>
+        <div class="field-value" :class="[wrap ? 'pre' : 'clip', {invalid}]">
+          <span v-if="isMulti" class="list-value"><span class="list-text">{{ text }}</span><ListNav :count="value.length" :idx="idx" :title="all" @step="step" /></span>
+          <template v-else-if="text">{{ text }}</template><span v-else-if="placeholder" class="placeholder">{{ placeholder }}</span>
+        </div>
+      </template>
+    </div>
+  `,
+};
+
+// 横並び表示のカードの中身。カラム定義の並び順のとおりに、列の幅に応じて欄を横に並べる
+export const FieldGrid = {
+  components: { FieldItem },
+  props: {
+    columns: { type: Array, required: true },
+    data: { type: Object, required: true },
+    invalid: { type: Array, default: () => [] },
+    wrap: { type: Boolean, default: true },
+    placeholder: { type: Boolean, default: false },
+  },
+  setup(props) {
+    const cols = computed(() => props.columns.filter((c) => c.type !== "id"));
+    return { cols };
+  },
+  template: `
+    <div class="field-grid">
+      <FieldItem v-for="c in cols" :key="c.key" :col="c" :value="data[c.key] ?? null" :invalid="invalid.includes(c.key)"
+                 :wrap="wrap" :placeholder="placeholder ? '（' + c.name + 'の値）' : ''" />
+    </div>
   `,
 };
 
@@ -105,8 +178,9 @@ export function widthStyle(col) {
   return px ? { width: px + "px", minWidth: px + "px", maxWidth: px + "px" } : null;
 }
 
-// 横並び表示のカードで、欄が占める幅（4 分割のうちいくつか）。自動・全幅は 1 行全体
-export const WIDTH_SPAN = { s: 1, m: 2, l: 3, full: 4, auto: 4 };
+// 横並び表示のカードで、欄が占める幅（12 分割のうちいくつか）。
+// 小 = 1 行に 4 個、中 = 3 個、大 = 2 個、自動・全幅 = 1 個
+export const WIDTH_SPAN = { s: 3, m: 4, l: 6, full: 12, auto: 12 };
 
 // 画面ごとの表示の設定（折り返しなど）を、ブラウザに保存しておく
 export function storedFlag(key, initial) {

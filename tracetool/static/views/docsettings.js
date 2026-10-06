@@ -14,6 +14,7 @@ export default {
     const documents = ref([]);
     const hasVersions = ref(false);
     const referencedBy = ref([]);
+    const sample = ref(null); // レイアウトのプレビュー用（最新版の 1 つ目の項目）
     const saving = ref(false);
 
     const relations = ref([]);
@@ -30,6 +31,9 @@ export default {
         description.value = d.description;
         model.value = toEdit(d.schema);
         hasVersions.value = !!d.latest_version_id;
+        if (hasVersions.value) {
+          sample.value = (await api.get(`/api/documents/${props.docId}/latest-items`)).items[0]?.data || null;
+        }
         referencedBy.value = d.referenced_by || [];
       }
     });
@@ -73,7 +77,7 @@ export default {
       navigate("/");
     }
 
-    return { name, description, model, documents, relations, hasVersions, saving, save, remove, loadValues, createRelation, href };
+    return { sample, name, description, model, documents, relations, hasVersions, saving, save, remove, loadValues, createRelation, href };
   },
   template: `
     <section class="page">
@@ -97,7 +101,7 @@ export default {
         <template v-if="hasVersions"><br>参照 ID 列の変更は、次回の取り込みからリンクに反映されます。</template>
       </p>
       <SchemaEditor :model="model" :documents="documents" :self-id="docId" :relations="relations"
-                    :load-values="hasVersions ? loadValues : null" @create-relation="createRelation" />
+                    :load-values="hasVersions ? loadValues : null" :sample="sample" @create-relation="createRelation" />
       <p v-if="hasVersions" class="hint">「使われている値から enum を作る」は、最新版で実際に使われている値を選択肢にします。変更は「保存」を押すと、次回の取り込みから適用されます。</p>
 
       <div v-if="docId" class="danger-zone">

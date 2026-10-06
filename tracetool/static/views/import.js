@@ -381,7 +381,7 @@ export default {
             この列構成は、この文書の次回以降の取り込みにも引き継がれます。
           </p>
           <SchemaEditor :model="model" :documents="documents" :self-id="docId" :headers="settings.headers"
-                        :relations="relations" :load-values="loadValues"
+                        :relations="relations" :load-values="loadValues" :sample="validation?.preview?.[0]?.data || null"
                         @change="onSchemaChange" @create-relation="createRelation" />
           <div v-if="unmapped.length" class="unmapped">
             <span>どの列にも対応付けられていないファイルの列:</span>

@@ -70,6 +70,8 @@ def normalize_schema(schema: dict) -> dict:
             "importance": raw.get("importance") if raw.get("importance") in IMPORTANCE else DEFAULT_IMPORTANCE,
             # 表示の幅（一覧表示の列幅と、横並び表示のカード内での幅）。auto は従来どおり
             "width": raw.get("width") if raw.get("width") in WIDTHS else "auto",
+            # 横並び表示で、列名の後で改行して値を下に置くか（False なら列名を左に置き、長い列名は省略する）
+            "label_break": bool(raw.get("label_break")),
             "auto_id": None,
         }
         if col["type"] == "id" and raw.get("auto_id"):

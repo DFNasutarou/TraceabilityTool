@@ -181,9 +181,9 @@ def item_detail(conn: sqlite3.Connection, version_id: int, item_id: str) -> dict
 
 
 def display_schema(conn: sqlite3.Connection, doc_id: int, schema: dict) -> dict:
-    """表示用のカラム定義。版のカラム定義に、文書の作業中定義の重要度・幅を重ねる。
+    """表示用のカラム定義。版のカラム定義に、文書の作業中定義の重要度・幅・列名の後の改行を重ねる。
 
-    重要度・幅は表示だけに使う設定なので、取り込み直さなくても文書の設定画面での変更がすぐに表示に反映されるようにする。
+    これらは表示だけに使う設定なので、取り込み直さなくても文書の設定画面での変更がすぐに表示に反映されるようにする。
     """
     from . import documents as doc_svc
 
@@ -197,6 +197,7 @@ def display_schema(conn: sqlite3.Connection, doc_id: int, schema: dict) -> dict:
                 **c,
                 "importance": src.get("importance") or colschema.DEFAULT_IMPORTANCE,
                 "width": src.get("width") or "auto",
+                "label_break": bool(src.get("label_break")),
             }
         )
     return {**schema, "columns": cols}

@@ -145,3 +145,17 @@ def test_new_columns_default_to_low_importance_and_auto_width(client):
     r = ok(client.put(f"/api/imports/{s['session_id']}/settings", json={"header_row": 1}))
     assert {c["importance"] for c in r["schema"]["columns"]} == {"low"}
     assert {c["width"] for c in r["schema"]["columns"]} == {"auto"}
+
+
+def test_label_break_is_display_setting(client):
+    doc = new_doc(client)
+    s = start_import(client, doc, "a.csv", make_csv([["ID", "名前"], ["A", "x"]]))
+    r = ok(client.put(f"/api/imports/{s['session_id']}/settings", json={"header_row": 1}))
+    assert {c["label_break"] for c in r["schema"]["columns"]} == {False}
+    ok(client.post(f"/api/imports/{s['session_id']}/commit", json={"schema": r["schema"]}))
+    # 文書の設定で変えると、取り込み直さなくても表示用のカラム定義に反映される
+    d = ok(client.get(f"/api/documents/{doc}"))
+    d["schema"]["columns"][1]["label_break"] = True
+    ok(client.put(f"/api/documents/{doc}", json={"name": d["name"], "schema": d["schema"]}))
+    cols = ok(client.get(f"/api/documents/{doc}/latest-items"))["schema"]["columns"]
+    assert [c["label_break"] for c in cols] == [False, True]

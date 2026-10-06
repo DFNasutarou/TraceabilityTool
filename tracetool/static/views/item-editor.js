@@ -272,7 +272,7 @@ export default {
         key: newKey(), name, source_header: null, type: colForm.type,
         list: colForm.list && colForm.delim ? { delimiters: [colForm.delim === "\\n" ? "\n" : colForm.delim] } : null,
         enum_values: colForm.type === "enum" ? choices : null,
-        bool_values: null, ref_document_id: null, importance: "low", width: "auto", auto_id: null,
+        bool_values: null, ref_document_id: null, importance: "low", width: "auto", label_break: false, auto_id: null,
       });
       toast(`列「${name}」を追加しました。保存すると、この文書のカラム定義にも加わります`);
       Object.assign(colForm, { open: false, name: "", type: "string", list: false, delim: ";", choices: "" });
