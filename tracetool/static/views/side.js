@@ -5,7 +5,7 @@
 
 import { api, STATUS_LABEL, ORIGIN_LABEL } from "../api.js";
 import { route, href, navigate } from "../router.js";
-import { FieldGrid, storedFlag } from "./cells.js";
+import { FieldGrid, storedFlag, storedChoice } from "./cells.js";
 
 const { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } = Vue;
 
@@ -22,6 +22,7 @@ const ItemCard = {
     current: { type: Boolean, default: false },
     selectable: { type: Boolean, default: false }, // 中央の列: 押すとその項目を選ぶ
     wrap: { type: Boolean, default: true }, // 長い値を折り返して全文を表示する
+    minImportance: { type: String, default: "low" }, // この重要度以上の列だけを表示する
   },
   emits: ["select"],
   setup() {
@@ -38,7 +39,7 @@ const ItemCard = {
         <span v-if="entry.origin" class="sub">{{ ORIGIN_LABEL[entry.origin] }}</span>
       </div>
       <p v-if="!entry.data" class="err-text small">最新版に存在しない ID です（リンク切れ）。</p>
-      <FieldGrid v-else :columns="schema.columns" :data="entry.data" :invalid="entry.invalid" :wrap="wrap" />
+      <FieldGrid v-else :columns="schema.columns" :data="entry.data" :invalid="entry.invalid" :wrap="wrap" :min-importance="minImportance" />
     </div>
   `,
 };
@@ -52,6 +53,8 @@ export default {
     const range = ref([0, 0]); // 中央の列で描画している範囲 [開始, 終了)
     const listEl = ref(null);
     const wrap = storedFlag("sideWrap", true);
+    // 表示する列: 重要度がこれ以上の列だけをカードに出す（ブラウザに記憶する）
+    const minImportance = storedChoice("sideMinImportance", "low", ["low", "mid", "high"]);
 
     const selectedId = computed(() => route.query.item || all.value?.items[0]?.item_id);
     const selectedIndex = computed(() => (all.value ? all.value.items.findIndex((i) => i.item_id === selectedId.value) : -1));
@@ -118,7 +121,7 @@ export default {
 
     const count = (groups) => groups.reduce((n, g) => n + g.items.length, 0);
 
-    return { all, view, range, visible, listEl, wrap, selectedId, selectedIndex, prevId, nextId, select, showMore, count, href };
+    return { all, view, range, visible, listEl, wrap, minImportance, selectedId, selectedIndex, prevId, nextId, select, showMore, count, href };
   },
   template: `
     <section class="page side-page" v-if="all">
@@ -126,6 +129,13 @@ export default {
         <h1>{{ view ? view.document.name : '' }}: {{ selectedId }}</h1>
         <div class="actions">
           <button class="btn" :disabled="!prevId" @click="select(prevId, true)" title="前の項目（Alt + ←）">‹ 前の項目</button>
+          <label class="inline" title="列の重要度（文書の設定で列ごとに決めます）が高い方から、どこまでの列をカードに表示するかを選びます">表示する列
+            <select v-model="minImportance">
+              <option value="low">すべて（重要度 低 以上）</option>
+              <option value="mid">重要度 中 以上</option>
+              <option value="high">重要度 高 のみ</option>
+            </select>
+          </label>
           <label class="check" title="長い値を折り返して全文を表示します。外すと 1 行に収まる分だけ表示します"><input type="checkbox" v-model="wrap"> 折り返して全文を表示</label>
           <span class="sub">{{ selectedIndex + 1 }} / {{ all.items.length }}</span>
           <button class="btn" :disabled="!nextId" @click="select(nextId, true)" title="次の項目（Alt + →）">次の項目 ›</button>
@@ -141,7 +151,7 @@ export default {
             <div v-for="g in view.upper" :key="g.relation_id" class="side-group">
               <h3>{{ g.document.name }}</h3>
               <p v-if="!g.items.length" class="warn-text small">リンクがありません（上位なし）</p>
-              <ItemCard v-for="e in g.items" :key="e.link_id" :doc-id="g.document.id" :schema="g.schema" :entry="e" :wrap="wrap" />
+              <ItemCard v-for="e in g.items" :key="e.link_id" :doc-id="g.document.id" :schema="g.schema" :entry="e" :wrap="wrap" :min-importance="minImportance" />
             </div>
           </div>
         </div>
@@ -151,7 +161,7 @@ export default {
           <div class="side-scroll" ref="listEl">
             <button v-if="range[0] > 0" class="btn small side-more" @click="showMore(-1)">前の項目を表示（あと {{ range[0] }} 件）</button>
             <ItemCard v-for="e in visible" :key="e.item_id" :doc-id="docId" :schema="all.schema" :entry="e"
-                      :current="e.item_id === selectedId" selectable :wrap="wrap" @select="select" />
+                      :current="e.item_id === selectedId" selectable :wrap="wrap" :min-importance="minImportance" @select="select" />
             <button v-if="range[1] < all.items.length" class="btn small side-more" @click="showMore(1)">次の項目を表示（あと {{ all.items.length - range[1] }} 件）</button>
           </div>
         </div>
@@ -163,7 +173,7 @@ export default {
             <div v-for="g in view.lower" :key="g.relation_id" class="side-group">
               <h3>{{ g.document.name }}</h3>
               <p v-if="!g.items.length" class="warn-text small">リンクがありません（下位なし）</p>
-              <ItemCard v-for="e in g.items" :key="e.link_id" :doc-id="g.document.id" :schema="g.schema" :entry="e" :wrap="wrap" />
+              <ItemCard v-for="e in g.items" :key="e.link_id" :doc-id="g.document.id" :schema="g.schema" :entry="e" :wrap="wrap" :min-importance="minImportance" />
             </div>
           </div>
         </div>

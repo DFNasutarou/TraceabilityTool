@@ -94,9 +94,14 @@ export const FieldGrid = {
     invalid: { type: Array, default: () => [] },
     wrap: { type: Boolean, default: true },
     placeholder: { type: Boolean, default: false },
+    minImportance: { type: String, default: "low" }, // この重要度以上の列だけを表示する
   },
   setup(props) {
-    const cols = computed(() => props.columns.filter((c) => c.type !== "id"));
+    const cols = computed(() =>
+      props.columns.filter(
+        (c) => c.type !== "id" && IMPORTANCE_RANK[c.importance || "low"] >= IMPORTANCE_RANK[props.minImportance]
+      )
+    );
     return { cols };
   },
   template: `
@@ -178,11 +183,33 @@ export function widthStyle(col) {
   return px ? { width: px + "px", minWidth: px + "px", maxWidth: px + "px" } : null;
 }
 
+export const IMPORTANCE_RANK = { low: 0, mid: 1, high: 2 };
+
 // 横並び表示のカードで、欄が占める幅（12 分割のうちいくつか）。
 // 小 = 1 行に 4 個、中 = 3 個、大 = 2 個、自動・全幅 = 1 個
 export const WIDTH_SPAN = { s: 3, m: 4, l: 6, full: 12, auto: 12 };
 
 // 画面ごとの表示の設定（折り返しなど）を、ブラウザに保存しておく
+// 選択肢の値（文字列）を記憶する。choices に無い値が保存されていたら既定値にする
+export function storedChoice(key, initial, choices) {
+  let v = initial;
+  try {
+    const s = localStorage.getItem("tracetool." + key);
+    if (s !== null && choices.includes(s)) v = s;
+  } catch {
+    // 保存できない環境では既定値のまま
+  }
+  const r = ref(v);
+  watch(r, (x) => {
+    try {
+      localStorage.setItem("tracetool." + key, x);
+    } catch {
+      // 無視する
+    }
+  });
+  return r;
+}
+
 export function storedFlag(key, initial) {
   let v = initial;
   try {
