@@ -181,20 +181,28 @@ def item_detail(conn: sqlite3.Connection, version_id: int, item_id: str) -> dict
 
 
 def display_schema(conn: sqlite3.Connection, doc_id: int, schema: dict) -> dict:
-    """表示用のカラム定義。版のカラム定義に、文書の作業中定義の重要度・幅・列名の後の改行を重ねる。
+    """表示用のカラム定義。版のカラム定義に、文書の作業中定義の列の並び順・列名・重要度・幅・列名の後の改行を重ねる。
 
     これらは表示だけに使う設定なので、取り込み直さなくても文書の設定画面での変更がすぐに表示に反映されるようにする。
+    並び順は作業中定義の順にし、作業中定義に無い列（取り込み後に設定画面で消した列）は後ろに元の順で置く。
     """
     from . import documents as doc_svc
 
-    working = {c["key"]: c for c in colschema.columns(doc_svc.get_document(conn, doc_id)["schema"])}
+    working_cols = colschema.columns(doc_svc.get_document(conn, doc_id)["schema"])
+    working = {c["key"]: c for c in working_cols}
+    order = {c["key"]: i for i, c in enumerate(working_cols)}
+    version_cols = colschema.columns(schema)
+    version_cols = sorted(
+        version_cols, key=lambda c: order.get(c["key"], len(order) + version_cols.index(c))
+    )
     cols = []
-    for c in colschema.columns(schema):
+    for c in version_cols:
         w = working.get(c["key"])
         src = w or c
         cols.append(
             {
                 **c,
+                "name": src.get("name") or c["name"],
                 "importance": src.get("importance") or colschema.DEFAULT_IMPORTANCE,
                 "width": src.get("width") or "auto",
                 "label_break": bool(src.get("label_break")),

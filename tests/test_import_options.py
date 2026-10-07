@@ -159,3 +159,20 @@ def test_label_break_is_display_setting(client):
     ok(client.put(f"/api/documents/{doc}", json={"name": d["name"], "schema": d["schema"]}))
     cols = ok(client.get(f"/api/documents/{doc}/latest-items"))["schema"]["columns"]
     assert [c["label_break"] for c in cols] == [False, True]
+
+
+def test_display_follows_working_column_order(client):
+    """設定画面で列を並べ替えると、取り込み直さなくても横並び表示・項目一覧の列の順に反映される。"""
+    doc = new_doc(client)
+    s = start_import(client, doc, "a.csv", make_csv([["ID", "名前", "区分", "備考"], ["A", "x", "y", "z"]]))
+    r = ok(client.put(f"/api/imports/{s['session_id']}/settings", json={"header_row": 1}))
+    vid = ok(client.post(f"/api/imports/{s['session_id']}/commit", json={"schema": r["schema"]}))["version_id"]
+    d = ok(client.get(f"/api/documents/{doc}"))
+    cols = d["schema"]["columns"]
+    # 備考を 2 番目に移し（名前も変える）、区分を設定画面で消す
+    cols[3]["name"] = "メモ"
+    d["schema"]["columns"] = [cols[0], cols[3], cols[1]]
+    ok(client.put(f"/api/documents/{doc}", json={"name": d["name"], "schema": d["schema"]}))
+    expected = ["ID", "メモ", "名前", "区分"]  # 消した列は後ろに残す（版にはある）
+    assert [c["name"] for c in ok(client.get(f"/api/documents/{doc}/latest-items"))["schema"]["columns"]] == expected
+    assert [c["name"] for c in ok(client.get(f"/api/versions/{vid}/items"))["schema"]["columns"]] == expected
