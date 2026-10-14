@@ -170,6 +170,22 @@ def replace_items(conn: sqlite3.Connection, version_id: int, schema: dict, items
         conn.clear_cache()
 
 
+def make_first(conn: sqlite3.Connection, version_id: int) -> int:
+    """選んだ版だけを残して v1 にする（他の版はすべて削除し、版番号を 1 から振り直す）。文書 ID を返す。
+
+    誤って版を増やしてしまった場合に、履歴を整理するために使う。自動リンクの再生成は呼び出し側で行う。
+    """
+    v = get_version(conn, version_id)
+    doc_id = v["document_id"]
+    conn.execute("DELETE FROM versions WHERE document_id = ? AND id <> ?", (doc_id, version_id))
+    conn.execute("UPDATE versions SET version_no = 1 WHERE id = ?", (version_id,))
+    # 削除した版の番号を再利用しないための記録も、振り直した番号に合わせる
+    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, '1')", (f"max_version_no:{doc_id}",))
+    if hasattr(conn, "clear_cache"):
+        conn.clear_cache()
+    return doc_id
+
+
 def delete_version(conn: sqlite3.Connection, version_id: int) -> int:
     """版を削除し、文書 ID を返す。自動リンクの再生成は呼び出し側で行う。"""
     v = get_version(conn, version_id)

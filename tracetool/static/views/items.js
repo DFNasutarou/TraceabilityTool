@@ -253,7 +253,7 @@ export default {
             </thead>
             <tbody>
               <tr v-for="it in result.items" :key="it.item_id" @click="selectItem(it.item_id)" :class="{selected: route.query.item === it.item_id}">
-                <td v-for="c in columns" :key="c.key" :style="widthStyle(c)" :class="{invalid: it.invalid.includes(c.key), idcell: c.type === 'id'}"><CellValue :value="it.data[c.key]" :col="c" /></td>
+                <td v-for="c in columns" :key="c.key" :style="widthStyle(c)" :class="{invalid: it.invalid.includes(c.key), idcell: c.type === 'id'}"><CellValue :value="it.data[c.key]" :col="c" :doc-id="docId" /></td>
                 <template v-if="isLatest">
                   <td class="num">{{ result.has_upper ? it.trace?.upper_count : '-' }}</td>
                   <td class="num">{{ result.has_lower ? it.trace?.lower_count : '-' }}</td>
@@ -277,12 +277,12 @@ export default {
           <table class="kv">
             <tr v-for="c in detail.schema.columns" :key="c.key">
               <th>{{ c.name }}</th>
-              <td :class="{invalid: detail.item.invalid.includes(c.key)}" class="pre">{{ fmtValue(detail.item.data[c.key], c) }}</td>
+              <td :class="{invalid: detail.item.invalid.includes(c.key)}" class="pre"><CellValue v-if="c.image" :value="detail.item.data[c.key]" :col="c" :doc-id="docId" /><template v-else>{{ fmtValue(detail.item.data[c.key], c) }}</template></td>
             </tr>
           </table>
 
           <div v-for="g in detail.relations" :key="g.relation_id" class="link-group">
-            <h3>{{ g.direction === 'upper' ? '上位' : '下位' }}: {{ g.document.name }}</h3>
+            <h3>{{ g.direction === 'upper' ? '上位' : '下位' }}: {{ g.document.name }}<span v-if="g.document.id === docId" class="sub">（文書内）</span></h3>
             <p v-if="!g.links.length" class="warn-text small">リンクがありません</p>
             <ul class="links">
               <li v-for="l in g.links" :key="l.id" :class="{inactive: !l.active}">
@@ -295,6 +295,13 @@ export default {
                   <button v-if="l.active && l.status === 'suspect'" class="btn small" @click="ackLink(l)">確認済み</button>
                   <button v-if="l.active" class="btn small danger-ghost" @click="removeLink(l)">{{ l.origin === 'auto' ? '無効化' : '削除' }}</button>
                   <button v-else class="btn small primary" @click="restoreLink(l)">元に戻す</button>
+                </span>
+                <span v-if="l.sources && l.sources.length" class="link-sources">
+                  関連表:
+                  <template v-for="(s, k) in l.sources" :key="s.document_id + s.item_id">
+                    <template v-if="k">、</template>
+                    <a :href="href('/documents/' + s.document_id + '/items', {item: s.item_id})">{{ s.document }} の {{ s.item_id }}</a>
+                  </template>
                 </span>
               </li>
             </ul>

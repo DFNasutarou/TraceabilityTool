@@ -151,9 +151,8 @@ def item_trace_summary(conn: sqlite3.Connection, doc_id: int) -> dict[str, dict]
         i: {"upper_count": 0, "lower_count": 0, "no_upper": False, "no_lower": False, "suspect": 0, "broken": 0}
         for i in hashes
     }
-    for rel in rel_svc.relations_of(conn, doc_id):
+    for rel, as_upper in rel_svc.sides_of(conn, doc_id):
         ev = _evaluate(conn, rel)
-        as_upper = rel["upper_doc_id"] == doc_id
         mine = "upper_item_id" if as_upper else "lower_item_id"
         linked = ev["upper_linked"] if as_upper else ev["lower_linked"]
         count_key = "lower_count" if as_upper else "upper_count"

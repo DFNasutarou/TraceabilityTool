@@ -51,7 +51,7 @@ export default {
         <div class="actions" v-if="ev">
           <label class="inline">関係
             <select :value="relId" @change="selectRelation">
-              <option v-for="r in relations" :key="r.relation.id" :value="r.relation.id">{{ r.upper_name }} → {{ r.lower_name }}</option>
+              <option v-for="r in relations" :key="r.relation.id" :value="r.relation.id">{{ r.relation.upper_doc_id === r.relation.lower_doc_id ? r.upper_name + '（文書内）' : r.upper_name + ' → ' + r.lower_name }}</option>
             </select>
           </label>
         </div>

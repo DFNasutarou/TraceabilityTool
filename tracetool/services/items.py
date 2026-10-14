@@ -129,8 +129,8 @@ def item_detail(conn: sqlite3.Connection, version_id: int, item_id: str) -> dict
 
     groups = []
     if is_latest:
-        for rel in rel_svc.relations_of(conn, doc_id):
-            as_upper = rel["upper_doc_id"] == doc_id
+        for rel, as_upper in rel_svc.sides_of(conn, doc_id):
+            sources = link_svc.table_sources(conn, rel["upper_doc_id"], rel["lower_doc_id"])
             other_id = rel["lower_doc_id"] if as_upper else rel["upper_doc_id"]
             other_doc = doc_svc.get_document(conn, other_id)
             other_latest = ver_svc.latest_version(conn, other_id)
@@ -153,7 +153,9 @@ def item_detail(conn: sqlite3.Connection, version_id: int, item_id: str) -> dict
                         "label": colschema.as_text(other_item["data"].get(disp)) if other_item and disp else "",
                         "active": link_svc.is_active(link),
                         "origin": trace_svc.link_origin(link),
-                        "auto": bool(link["auto_by_upper"] or link["auto_by_lower"]),
+                        "auto": bool(link["auto_by_table"]),
+                        # 自動リンクを作った関連表の行（関連表の他の列も見られるように）
+                        "sources": sources.get((link["upper_item_id"], link["lower_item_id"]), []),
                         "status": trace_svc.link_status(link, upper_hashes, lower_hashes),
                         "_order": other_item["row_no"] if other_item else float("inf"),
                     }
@@ -173,7 +175,7 @@ def item_detail(conn: sqlite3.Connection, version_id: int, item_id: str) -> dict
             )
     return {
         "version": {k: version[k] for k in ("id", "document_id", "version_no", "label")},
-        "schema": version["schema"],
+        "schema": display_schema(conn, doc_id, version["schema"]),
         "is_latest": is_latest,
         "item": item,
         "relations": groups,
@@ -181,7 +183,7 @@ def item_detail(conn: sqlite3.Connection, version_id: int, item_id: str) -> dict
 
 
 def display_schema(conn: sqlite3.Connection, doc_id: int, schema: dict) -> dict:
-    """表示用のカラム定義。版のカラム定義に、文書の作業中定義の列の並び順・列名・重要度・幅・列名の後の改行を重ねる。
+    """表示用のカラム定義。版のカラム定義に、文書の作業中定義の列の並び順・列名・重要度・幅・列名の後の改行・画像の設定を重ねる。
 
     これらは表示だけに使う設定なので、取り込み直さなくても文書の設定画面での変更がすぐに表示に反映されるようにする。
     並び順は作業中定義の順にし、作業中定義に無い列（取り込み後に設定画面で消した列）は後ろに元の順で置く。
@@ -206,6 +208,7 @@ def display_schema(conn: sqlite3.Connection, doc_id: int, schema: dict) -> dict:
                 "importance": src.get("importance") or colschema.DEFAULT_IMPORTANCE,
                 "width": src.get("width") or "auto",
                 "label_break": bool(src.get("label_break")),
+                "image": src.get("image"),
             }
         )
     return {**schema, "columns": cols}
@@ -255,8 +258,7 @@ def item_neighborhood(conn: sqlite3.Connection, doc_id: int, item_id: str) -> di
     pos = order.index(item_id)
 
     sides: dict[str, list] = {"upper": [], "lower": []}
-    for rel in rel_svc.relations_of(conn, doc_id):
-        as_upper = rel["upper_doc_id"] == doc_id
+    for rel, as_upper in rel_svc.sides_of(conn, doc_id):
         other_id = rel["lower_doc_id"] if as_upper else rel["upper_doc_id"]
         other_latest = ver_svc.latest_version(conn, other_id)
         other_items = ver_svc.load_items(conn, other_latest["id"]) if other_latest else []

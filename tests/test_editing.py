@@ -1,6 +1,6 @@
 """項目一覧の編集モード（POST /api/documents/{id}/edit）と、選択式の絞り込み。"""
 
-from .test_flow import do_import, ok, req_csv, scr_xlsx, setup
+from .test_flow import do_import, link_doc, ok, req_csv, scr_xlsx, setup
 
 
 def latest(client, doc):
@@ -112,16 +112,16 @@ def test_edit_list_values(client):
     req, scr, rel = setup(client)
     do_import(client, req, "req.csv", req_csv())
     do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)
-    base = latest(client, scr)
-    ref_key = [c for c in base["schema"]["columns"] if c.get("ref_document_id")][0]["key"]
+    link = link_doc(client, scr)
+    base = latest(client, link)  # 関連表を編集する（L-003 が SCR-03 の行）
 
     def mutate(schema, rows):
-        rows[2]["data"][ref_key] = ["REQ-003", " ", "REQ-001"]  # 空の要素は捨てる
+        rows[2]["data"]["lup"] = ["REQ-003", " ", "REQ-001"]  # 空の要素は捨てる
 
-    ok(edit(client, scr, base, "new", mutate))
-    after = {i["item_id"]: i for i in latest(client, scr)["items"]}
-    assert after["SCR-03"]["data"][ref_key] == ["REQ-003", "REQ-001"]
-    # 参照 ID 列を編集すると自動リンクも作り直される
+    ok(edit(client, link, base, "new", mutate))
+    after = {i["item_id"]: i for i in latest(client, link)["items"]}
+    assert after["L-003"]["data"]["lup"] == ["REQ-003", "REQ-001"]
+    # 関連表のキーを編集すると自動リンクも作り直される
     pairs = {(l["upper_item_id"], l["lower_item_id"]) for l in ok(client.get(f"/api/trace/{rel}"))["links"]}
     assert ("REQ-003", "SCR-03") in pairs and ("REQ-001", "SCR-03") in pairs
 
@@ -172,8 +172,8 @@ def test_rename_id_updates_links_and_references(client):
 
     impact = ok(client.post(f"/api/documents/{req}/rename-impact", json={"renames": renames}))
     assert impact["links"] == [{"document": "画面定義書", "count": 3}]
-    assert impact["documents"][0]["document"] == "画面定義書"
-    assert impact["documents"][0]["items"] == ["SCR-01", "SCR-02"]
+    assert impact["documents"][0]["document"] == "要件-画面対応表"
+    assert impact["documents"][0]["items"] == ["L-001", "L-002"]
 
     def mutate(rows):
         rows[1]["data"]["rid"] = "REQ-020"
@@ -186,12 +186,12 @@ def test_rename_id_updates_links_and_references(client):
     assert ("REQ-020", "SCR-01") in pairs and ("REQ-020", "SCR-02") in pairs and ("REQ-020", "SCR-03") in pairs
     assert not any("REQ-002" in p for p in pairs)
     assert ev["suspect"] == [] and not any(l["upper_item_id"] == "REQ-020" for l in ev["broken"])
-    # 下位文書の参照 ID 列も書き換わる（版は増えない）
-    scr_items = {i["item_id"]: i for i in latest(client, scr)["items"]}
-    ref_key = [c for c in latest(client, scr)["schema"]["columns"] if c.get("ref_document_id")][0]["key"]
-    assert scr_items["SCR-01"]["data"][ref_key] == ["REQ-001", "REQ-020"]
-    assert scr_items["SCR-02"]["data"][ref_key] == ["REQ-020"]
-    assert len(ok(client.get(f"/api/documents/{scr}/versions"))) == 1
+    # 関連表のキーも書き換わる（版は増えない）
+    link = link_doc(client, scr)
+    rows = {i["item_id"]: i for i in latest(client, link)["items"]}
+    assert rows["L-001"]["data"]["lup"] == ["REQ-001", "REQ-020"]
+    assert rows["L-002"]["data"]["lup"] == ["REQ-020"]
+    assert len(ok(client.get(f"/api/documents/{link}/versions"))) == 1
     # 手動リンクは手動のまま
     manual = [l for l in ev["links"] if l["lower_item_id"] == "SCR-03"][0]
     assert manual["origin"] == "manual"
@@ -241,12 +241,17 @@ def test_rename_keeps_downstream_links_confirmed(client):
     req, scr, rel = setup(client)
     do_import(client, req, "req.csv", req_csv())
     do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)
-    tst = ok(client.post("/api/documents", json={"name": "テスト仕様書", "schema": {"columns": [
-        {"key": "tid", "name": "テストID", "type": "id"},
-        {"key": "tref", "name": "対象画面", "type": "string", "ref_document_id": scr},
-    ]}}))["id"]
+    tst = ok(client.post("/api/documents", json={"name": "テスト仕様書"}))["id"]
     rel2 = ok(client.post("/api/relations", json={"upper_doc_id": scr, "lower_doc_id": tst}))["id"]
-    do_import(client, tst, "tst.csv", make_csv([["テストID", "対象画面"], ["T-1", "SCR-01"], ["T-2", "SCR-02"]]))
+    data = make_csv([["テストID", "対象画面"], ["T-1", "SCR-01"], ["T-2", "SCR-02"]])
+    do_import(client, tst, "tst.csv", data)
+    t2 = ok(client.post("/api/documents", json={"name": "画面-テスト対応表", "schema": {"columns": [
+        {"key": "k", "name": "No", "type": "id", "auto_id": {"prefix": "T"}},
+        {"key": "a", "name": "対象画面", "type": "string", "ref_document_id": scr, "link_role": "upper"},
+        {"key": "b", "name": "テストID", "type": "string", "ref_document_id": tst, "link_role": "lower"},
+    ]}}))["id"]
+    do_import(client, t2, "tst.csv", data)
+    assert len(ok(client.get(f"/api/trace/{rel2}"))["links"]) == 2
     assert ok(client.get(f"/api/trace/{rel2}"))["suspect"] == []
 
     base = latest(client, req)
@@ -263,17 +268,18 @@ def test_rename_clears_reference_warning(client):
     req, scr, rel = setup(client)
     do_import(client, req, "req.csv", req_csv())
     do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)  # SCR-04 → REQ-999（存在しない）
-    before = {i["item_id"]: i for i in latest(client, scr)["items"]}
-    ref_key = before["SCR-04"]["invalid"][0]
+    link = link_doc(client, scr)
+    before = {i["item_id"]: i for i in latest(client, link)["items"]}
+    assert before["L-004"]["invalid"] == ["lup"]  # SCR-04 の行は REQ-999（存在しない）を参照している
     base = latest(client, req)
 
     def mutate(rows):
         rows[2]["data"]["rid"] = "REQ-999"  # REQ-003 を REQ-999 に
 
     ok(edit_with_orig(client, req, base, mutate))
-    after = {i["item_id"]: i for i in latest(client, scr)["items"]}
-    assert after["SCR-04"]["invalid"] == []  # 参照先が存在するようになった
-    assert after["SCR-04"]["data"][ref_key] == "REQ-999" or after["SCR-04"]["data"][ref_key] == ["REQ-999"]
+    after = {i["item_id"]: i for i in latest(client, link)["items"]}
+    assert after["L-004"]["invalid"] == []  # 参照先が存在するようになった
+    assert after["L-004"]["data"]["lup"] == ["REQ-999"]
 
 
 def test_edit_does_not_restore_removed_columns_or_choices(client):

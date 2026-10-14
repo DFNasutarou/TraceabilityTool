@@ -1,6 +1,6 @@
 // 項目一覧・横並び表示・編集で共通に使う、セルの値の表示部品と、選択式の絞り込み部品。
 
-import { fmtValue } from "../api.js";
+import { fmtValue, query } from "../api.js";
 
 const { ref, computed, watch, onMounted, onBeforeUnmount } = Vue;
 
@@ -19,6 +19,27 @@ export const ListNav = {
   `,
 };
 
+// 画像のパスの列の値。画像を表示し、押すと別のタブで元の大きさの画像を開く。表示できなければパスと理由を出す
+export const ImageValue = {
+  props: {
+    docId: { type: Number, required: true },
+    col: { type: Object, required: true },
+    path: { type: String, required: true },
+  },
+  setup(props) {
+    const failed = ref(false);
+    watch(() => props.path, () => (failed.value = false));
+    const url = computed(() => "/api/image" + query({ doc: props.docId, key: props.col.key, path: props.path }));
+    return { failed, url };
+  },
+  template: `
+    <span v-if="failed" class="img-error" :title="'画像を表示できません（基準フォルダ・パス・ファイルの種類を確認してください）: ' + path">⚠ {{ path }}</span>
+    <a v-else :href="url" target="_blank" rel="noopener" @click.stop :title="path + '（押すと元の大きさで開きます）'">
+      <img :src="url" :alt="path" class="cell-img" loading="lazy" @error="failed = true">
+    </a>
+  `,
+};
+
 // リスト形式で値が 2 つ以上ある場合に、1 つ目だけを表示して ‹ › で切り替えるための状態
 function useListValue(valueRef, colRef) {
   const idx = ref(0);
@@ -28,26 +49,37 @@ function useListValue(valueRef, colRef) {
     const v = valueRef();
     return isMulti.value ? fmtValue(v[Math.min(idx.value, v.length - 1)]) : fmtValue(v, colRef());
   });
+  // 今表示している 1 つの値（画像のパスの列で、画像にする値）
+  const current = computed(() => {
+    const v = valueRef();
+    const x = Array.isArray(v) ? v[Math.min(idx.value, v.length - 1)] : v;
+    return x === null || x === undefined || x === "" ? "" : String(x);
+  });
   const all = computed(() => (isMulti.value ? `全 ${valueRef().length} 件: ` + fmtValue(valueRef(), colRef()) : ""));
   function step(d) {
     const n = valueRef().length;
     idx.value = (idx.value + d + n) % n;
   }
-  return { idx, isMulti, text, all, step };
+  return { idx, isMulti, text, all, step, current };
 }
 
 // セルの値（項目一覧・編集）。リスト形式で値が 2 つ以上ある場合は 1 つ目だけを表示し、末尾の ‹ › で切り替える
 export const CellValue = {
-  components: { ListNav },
+  components: { ListNav, ImageValue },
   props: {
     value: { default: null },
     col: { type: Object, default: null },
+    docId: { type: Number, default: null }, // 指定すると、画像のパスの列は画像で表示する
   },
   setup(props) {
-    return useListValue(() => props.value, () => props.col);
+    const s = useListValue(() => props.value, () => props.col);
+    return { ...s, asImage: computed(() => !!(props.docId && props.col?.image && s.current.value)) };
   },
   template: `
-    <span v-if="isMulti" class="list-value"><span class="list-text">{{ text }}</span><ListNav :count="value.length" :idx="idx" :title="all" @step="step" /></span>
+    <span v-if="isMulti" class="list-value">
+      <ImageValue v-if="asImage" :doc-id="docId" :col="col" :path="current" /><span v-else class="list-text">{{ text }}</span><ListNav :count="value.length" :idx="idx" :title="all" @step="step" />
+    </span>
+    <ImageValue v-else-if="asImage" :doc-id="docId" :col="col" :path="current" />
     <template v-else>{{ text }}</template>
   `,
 };
@@ -55,29 +87,39 @@ export const CellValue = {
 // 横並び表示のカードの 1 つの欄（列名と値）。
 // 列名の後で改行する列は、列名の行に ‹ › を置く。改行しない列は、列名を左に置き（長ければ省略）、‹ › を値の末尾に置く
 const FieldItem = {
-  components: { ListNav },
+  components: { ListNav, ImageValue },
   props: {
     col: { type: Object, required: true },
     value: { default: null },
     invalid: { type: Boolean, default: false },
     wrap: { type: Boolean, default: true },
     placeholder: { type: String, default: "" }, // 値が無いときに薄く表示する文字（レイアウトのプレビュー用）
+    docId: { type: Number, default: null }, // 指定すると、画像のパスの列は画像で表示する
   },
   setup(props) {
-    return { ...useListValue(() => props.value, () => props.col), span: computed(() => WIDTH_SPAN[props.col.width] || 12) };
+    const s = useListValue(() => props.value, () => props.col);
+    return {
+      ...s,
+      span: computed(() => WIDTH_SPAN[props.col.width] || 12),
+      asImage: computed(() => !!(props.docId && props.col.image && s.current.value)),
+    };
   },
   template: `
     <div class="field" :class="['span-' + span, 'imp-' + (col.importance || 'low'), col.label_break ? 'break' : 'inline']">
       <template v-if="col.label_break">
         <div class="field-head"><span class="field-name" :title="col.name">{{ col.name }}</span><ListNav v-if="isMulti" :count="value.length" :idx="idx" :title="all" @step="step" /></div>
         <div class="field-value" :class="[wrap ? 'pre' : 'clip', {invalid}]">
-          <template v-if="text">{{ text }}</template><span v-else-if="placeholder" class="placeholder">{{ placeholder }}</span>
+          <ImageValue v-if="asImage" :doc-id="docId" :col="col" :path="current" />
+          <template v-else-if="text">{{ text }}</template><span v-else-if="placeholder" class="placeholder">{{ placeholder }}</span>
         </div>
       </template>
       <template v-else>
         <span class="field-name" :title="col.name">{{ col.name }}</span>
         <div class="field-value" :class="[wrap ? 'pre' : 'clip', {invalid}]">
-          <span v-if="isMulti" class="list-value"><span class="list-text">{{ text }}</span><ListNav :count="value.length" :idx="idx" :title="all" @step="step" /></span>
+          <span v-if="isMulti" class="list-value">
+            <ImageValue v-if="asImage" :doc-id="docId" :col="col" :path="current" /><span v-else class="list-text">{{ text }}</span><ListNav :count="value.length" :idx="idx" :title="all" @step="step" />
+          </span>
+          <ImageValue v-else-if="asImage" :doc-id="docId" :col="col" :path="current" />
           <template v-else-if="text">{{ text }}</template><span v-else-if="placeholder" class="placeholder">{{ placeholder }}</span>
         </div>
       </template>
@@ -95,6 +137,7 @@ export const FieldGrid = {
     wrap: { type: Boolean, default: true },
     placeholder: { type: Boolean, default: false },
     minImportance: { type: String, default: "low" }, // この重要度以上の列だけを表示する
+    docId: { type: Number, default: null }, // 画像のパスの列を画像で表示するときの文書
   },
   setup(props) {
     const cols = computed(() =>
@@ -107,7 +150,7 @@ export const FieldGrid = {
   template: `
     <div class="field-grid">
       <FieldItem v-for="c in cols" :key="c.key" :col="c" :value="data[c.key] ?? null" :invalid="invalid.includes(c.key)"
-                 :wrap="wrap" :placeholder="placeholder ? '（' + c.name + 'の値）' : ''" />
+                 :wrap="wrap" :doc-id="docId" :placeholder="placeholder ? '（' + c.name + 'の値）' : ''" />
     </div>
   `,
 };

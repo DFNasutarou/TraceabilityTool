@@ -10,11 +10,11 @@ from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import importer, opener
+from . import images, importer, opener
 from .db import Database
 from .errors import AppError
 from .services import diff as diff_svc
@@ -247,6 +247,7 @@ def create_app(
     def delete_document(doc_id: int):
         with db.tx() as conn:
             doc_svc.delete_document(conn, doc_id)
+            link_svc.regenerate_auto_links(conn)  # 関連表を消した場合、その行から作った自動リンクを消す
         log.info("document deleted: id=%s", doc_id)
         return {"ok": True}
 
@@ -302,6 +303,23 @@ def create_app(
             link_svc.regenerate_auto_links(conn, doc_id)
         log.info("version deleted: id=%s", vid)
         return {"ok": True}
+
+    @app.post("/api/versions/{vid}/make-first")
+    def make_first_version(vid: int):
+        with db.tx() as conn:
+            doc_id = ver_svc.make_first(conn, vid)
+            link_svc.regenerate_auto_links(conn, doc_id)
+        log.info("versions squashed: document=%s version=%s", doc_id, vid)
+        return {"ok": True}
+
+    @app.get("/api/image")
+    def image(request: Request, doc: int, key: str, path: str):
+        # 他のサイトの画面から、この PC の画像を読み込ませない（img タグでも Sec-Fetch-Site が付く）
+        if request.headers.get("sec-fetch-site") not in (None, "same-origin", "none"):
+            return _error("他のサイトからは画像を表示できません", "forbidden_origin", 403)
+        with db.read() as conn:
+            file = images.resolve(conn, doc, key, path)
+        return FileResponse(file, headers={"Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff"})
 
     @app.get("/api/versions/{vid}/items")
     def query_items(

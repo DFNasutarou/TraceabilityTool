@@ -50,12 +50,24 @@ export default {
       await loadVersions();
     }
 
+    async function makeFirst(v) {
+      const others = versions.value.filter((x) => x.id !== v.id).map((x) => "v" + x.version_no);
+      const msg = `v${v.version_no}（${v.label || v.source_filename}）だけを残して v1 にします。\n` +
+        (others.length ? `他の版（${others.join("、")}）はすべて削除され、元に戻せません。\n` : "") +
+        (versions.value[0]?.id !== v.id ? "この版が最新版になり、自動リンクが作り直されます。\n" : "") + "よろしいですか？";
+      if (!confirm(msg)) return;
+      await api.post(`/api/versions/${v.id}/make-first`);
+      toast(`v${v.version_no} を v1 にしました（他の版を削除しました）`);
+      diff.value = null;
+      await loadVersions();
+    }
+
     const name = (key) => diff.value?.column_names[key] || key;
     const summary = computed(() =>
       diff.value ? { changed: diff.value.changed.length, added: diff.value.added.length, removed: diff.value.removed.length } : null
     );
 
-    return { doc, versions, fromId, toId, diff, tab, summary, COLUMN_CHANGE, runDiff, removeVersion, name, fmtDate, fmtValue, href, download };
+    return { makeFirst, doc, versions, fromId, toId, diff, tab, summary, COLUMN_CHANGE, runDiff, removeVersion, name, fmtDate, fmtValue, href, download };
   },
   template: `
     <section class="page" v-if="doc">
@@ -78,6 +90,8 @@ export default {
             <td class="num">{{ v.row_count }}</td>
             <td class="row-actions">
               <a class="btn small" :href="href('/documents/' + docId + '/items', {version: v.id})">閲覧</a>
+              <button v-if="versions.length > 1 || v.version_no !== 1" class="btn small danger-ghost" @click="makeFirst(v)"
+                      title="誤って版を増やしてしまった場合などに、この版だけを残して v1 にします（他の版は削除します）">この版だけ残して v1 にする</button>
               <button class="btn small danger-ghost" @click="removeVersion(v)">削除</button>
             </td>
           </tr>

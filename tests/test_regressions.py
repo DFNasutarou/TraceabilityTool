@@ -12,7 +12,7 @@ from tracetool.app import create_app
 from tracetool.db import Database
 
 from .conftest import make_csv, make_xlsx
-from .test_flow import REQ_SCHEMA, do_import, ok, req_csv, scr_schema, scr_xlsx, setup
+from .test_flow import REQ_SCHEMA, do_import, link_doc, ok, req_csv, scr_schema, scr_xlsx, setup
 
 
 # --- 取り込み順と要確認 ------------------------------------------------------------
@@ -48,15 +48,17 @@ def test_link_to_missing_id_is_not_suspect_when_id_appears(client):
 
 
 def test_relation_created_after_imports(client):
+    from .test_flow import link_schema
+
     req = ok(client.post("/api/documents", json={"name": "要件", "schema": REQ_SCHEMA}))["id"]
-    scr = ok(client.post("/api/documents", json={"name": "画面", "schema": {"columns": scr_schema(req)["columns"][:2]}}))["id"]
+    scr = ok(client.post("/api/documents", json={"name": "画面", "schema": scr_schema()}))["id"]
+    link = ok(client.post("/api/documents", json={"name": "対応表", "schema": link_schema(req, scr)}))["id"]
     do_import(client, req, "req.csv", req_csv())
-    do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2, schema={"columns": scr_schema(req)["columns"][:2]})
-    # 参照 ID 列を後から追加して再取り込み → 関係が無いのでエラー
-    v = do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2, schema=scr_schema(req))
-    assert v["error_count"] == 1
+    do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)
+    # 関係が無いうちは関連表を取り込めない
+    assert do_import(client, link, "scr.xlsx", scr_xlsx(), header_row=2)["error_count"] == 1
     rel = ok(client.post("/api/relations", json={"upper_doc_id": req, "lower_doc_id": scr}))["id"]
-    do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2, schema=scr_schema(req))
+    do_import(client, link, "scr.xlsx", scr_xlsx(), header_row=2)
     ev = ok(client.get(f"/api/trace/{rel}"))
     assert len(ev["links"]) == 4 and ev["suspect"] == []
 
@@ -81,20 +83,73 @@ def test_manual_and_auto_on_same_link(client):
     assert [l["origin"] for l in ev["links"] if l["id"] == lid] == ["auto"]
 
 
-def test_both_sides_have_ref_columns(client):
-    """上位・下位の両方に参照 ID 列がある場合、片方の再取り込みでもう片方のフラグが消えない。"""
+def test_two_link_tables_for_same_relation(client):
+    """同じ関係を対象にする関連表が 2 つある場合、片方の取り込み直しでもう片方のつながりは消えない。"""
     up = ok(client.post("/api/documents", json={"name": "U"}))["id"]
     lo = ok(client.post("/api/documents", json={"name": "L"}))["id"]
     rel = ok(client.post("/api/relations", json={"upper_doc_id": up, "lower_doc_id": lo}))["id"]
-    up_schema = {"columns": [{"key": "u", "name": "ID", "type": "id"}, {"key": "ur", "name": "下位", "type": "string", "ref_document_id": lo}]}
-    lo_schema = {"columns": [{"key": "l", "name": "ID", "type": "id"}, {"key": "lr", "name": "上位", "type": "string", "ref_document_id": up}]}
-    do_import(client, up, "u.csv", make_csv([["ID", "下位"], ["U1", "L1"], ["U2", "L2"]]), schema=up_schema)
-    do_import(client, lo, "l.csv", make_csv([["ID", "上位"], ["L1", "U1"], ["L2", ""]]), schema=lo_schema)
+
+    def table(name):
+        return ok(client.post("/api/documents", json={"name": name, "schema": {"columns": [
+            {"key": "k", "name": "No", "type": "id"},
+            {"key": "a", "name": "上位", "type": "string", "ref_document_id": up, "link_role": "upper"},
+            {"key": "b", "name": "下位", "type": "string", "ref_document_id": lo, "link_role": "lower"},
+        ]}}))["id"]
+
+    t1, t2 = table("対応表1"), table("対応表2")
+    do_import(client, t1, "t1.csv", make_csv([["No", "上位", "下位"], ["1", "U1", "L1"]]))
+    do_import(client, t2, "t2.csv", make_csv([["No", "上位", "下位"], ["1", "U2", "L2"], ["2", "U1", "L1"]]))
     assert len(ok(client.get(f"/api/trace/{rel}"))["links"]) == 2
-    # 下位側の参照を消しても、上位側の参照から U1-L1 は残る
-    do_import(client, lo, "l.csv", make_csv([["ID", "上位"], ["L1", ""], ["L2", ""]]), schema=lo_schema)
+    # 対応表 2 から U1-L1 を消しても、対応表 1 にあるので残る
+    do_import(client, t2, "t2.csv", make_csv([["No", "上位", "下位"], ["1", "U2", "L2"]]))
     pairs = {(l["upper_item_id"], l["lower_item_id"]) for l in ok(client.get(f"/api/trace/{rel}"))["links"]}
     assert pairs == {("U1", "L1"), ("U2", "L2")}
+    # 対応表 1 を削除すると、そこから作ったつながりだけが消える
+    ok(client.delete(f"/api/documents/{t1}"))
+    pairs = {(l["upper_item_id"], l["lower_item_id"]) for l in ok(client.get(f"/api/trace/{rel}"))["links"]}
+    assert pairs == {("U2", "L2")}
+
+
+def test_relation_within_document(client):
+    """同じ文書内のつながり（画面遷移など）。上位・下位の両方に同じ文書が出る。"""
+    scr = ok(client.post("/api/documents", json={"name": "画面"}))["id"]
+    do_import(client, scr, "s.csv", make_csv([["ID", "名前"], ["S1", "ログイン"], ["S2", "検索"], ["S3", "設定"]]))
+    rel = ok(client.post("/api/relations", json={"upper_doc_id": scr, "lower_doc_id": scr}))["id"]
+    assert client.post("/api/relations", json={"upper_doc_id": scr, "lower_doc_id": scr}).status_code == 400
+    trans = ok(client.post("/api/documents", json={"name": "画面遷移", "schema": {"columns": [
+        {"key": "k", "name": "No", "type": "id"},
+        {"key": "a", "name": "遷移元", "type": "string", "ref_document_id": scr, "link_role": "upper"},
+        {"key": "b", "name": "遷移先", "type": "string", "ref_document_id": scr, "link_role": "lower"},
+        {"key": "c", "name": "条件", "type": "string"},
+    ]}}))["id"]
+    do_import(client, trans, "t.csv", make_csv([["No", "遷移元", "遷移先", "条件"], ["1", "S1", "S2", "ログイン成功"], ["2", "S2", "S3", ""]]))
+    ev = ok(client.get(f"/api/trace/{rel}"))
+    assert {(l["upper_item_id"], l["lower_item_id"]) for l in ev["links"]} == {("S1", "S2"), ("S2", "S3")}
+    # 項目詳細には上位（遷移元）と下位（遷移先）の両方が出て、関連表の行も分かる
+    vid = ok(client.get(f"/api/documents/{scr}"))["latest_version_id"]
+    detail = ok(client.get(f"/api/versions/{vid}/item", params={"id": "S2"}))
+    groups = {g["direction"]: [l["item_id"] for l in g["links"]] for g in detail["relations"]}
+    assert groups == {"lower": ["S3"], "upper": ["S1"]}
+    up_link = [g for g in detail["relations"] if g["direction"] == "upper"][0]["links"][0]
+    assert up_link["sources"] == [{"document_id": trans, "document": "画面遷移", "item_id": "1", "label": "S1"}]
+    # 横並び表示も上下に出る
+    n = ok(client.get(f"/api/documents/{scr}/neighborhood", params={"id": "S2"}))
+    assert [e["item_id"] for e in n["upper"][0]["items"]] == ["S1"] and [e["item_id"] for e in n["lower"][0]["items"]] == ["S3"]
+    # 項目ごとのトレース状態: S1 は上位なし、S3 は下位なし
+    trace = {i["item_id"]: i["trace"] for i in ok(client.get(f"/api/versions/{vid}/items"))["items"]}
+    assert trace["S1"]["no_upper"] and not trace["S1"]["no_lower"]
+    assert trace["S3"]["no_lower"] and not trace["S3"]["no_upper"]
+    assert trace["S2"]["upper_count"] == 1 and trace["S2"]["lower_count"] == 1
+    # ID を付け直すと、文書内のリンクの両側と関連表の値が付け直される
+    base = ok(client.get(f"/api/documents/{scr}/latest-items"))
+    rows = [{"orig_id": i["item_id"], "data": dict(i["data"])} for i in base["items"]]
+    idk = [c for c in base["schema"]["columns"] if c["type"] == "id"][0]["key"]
+    rows[1]["data"][idk] = "S20"
+    ok(client.post(f"/api/documents/{scr}/edit", json={"base_version_id": base["version_id"], "mode": "new",
+                                                        "schema": base["schema"], "items": rows}))
+    ev = ok(client.get(f"/api/trace/{rel}"))
+    assert {(l["upper_item_id"], l["lower_item_id"]) for l in ev["links"]} == {("S1", "S20"), ("S20", "S3")}
+    assert ev["suspect"] == [] and ev["broken"] == []
 
 
 def test_item_summary_with_multiple_relations(client):
@@ -117,8 +172,10 @@ def test_item_summary_with_multiple_relations(client):
 def test_delete_all_versions_then_reimport(client):
     req, scr, rel = setup(client)
     do_import(client, req, "req.csv", req_csv())
-    v = do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)["version_id"]
-    ok(client.delete(f"/api/versions/{v}"))
+    do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)
+    link = link_doc(client, scr)
+    v = ok(client.get(f"/api/documents/{link}"))["latest_version_id"]
+    ok(client.delete(f"/api/versions/{v}"))  # 関連表の版を全部消すと、つながりも消える
     assert ok(client.get(f"/api/trace/{rel}"))["links"] == []
     do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)
     assert len(ok(client.get(f"/api/trace/{rel}"))["links"]) == 4
@@ -129,12 +186,13 @@ def test_delete_all_versions_then_reimport(client):
 
 def test_document_ids_are_not_reused_and_refs_cleared(client):
     req, scr, rel = setup(client)
-    assert ok(client.get(f"/api/documents/{req}"))["referenced_by"] == ["画面定義書"]
+    link = link_doc(client, scr)
+    assert ok(client.get(f"/api/documents/{req}"))["referenced_by"] == ["要件-画面対応表"]
     ok(client.delete(f"/api/documents/{req}"))
     new = ok(client.post("/api/documents", json={"name": "新しい文書"}))["id"]
     assert new != req
-    cols = ok(client.get(f"/api/documents/{scr}"))["schema"]["columns"]
-    assert all(c["ref_document_id"] is None for c in cols)
+    cols = ok(client.get(f"/api/documents/{link}"))["schema"]["columns"]
+    assert all(c["ref_document_id"] != req for c in cols)
 
 
 def test_update_document_without_schema_keeps_schema(client):
@@ -178,7 +236,7 @@ def test_migration_from_v1(tmp_path):
     conn.close()
     db = Database(path)
     with db.read() as c:
-        assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == "2"
+        assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == "3"
         assert "AUTOINCREMENT" in c.execute("SELECT sql FROM sqlite_master WHERE name='documents'").fetchone()[0]
         assert c.execute("SELECT COUNT(*) FROM links").fetchone()[0] == 1
         assert c.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 1
@@ -188,6 +246,49 @@ def test_migration_from_v1(tmp_path):
         c.execute("INSERT INTO documents(name, schema_json, created_at) VALUES ('C', '{}', 't')")
         assert c.execute("SELECT id FROM documents WHERE name='C'").fetchone()[0] == 3
         assert c.execute("SELECT COUNT(*) FROM links").fetchone()[0] == 0  # 外部キーのカスケードが効いている
+    db.close()
+
+
+def test_migration_from_v2_removes_ref_column_links(tmp_path):
+    """版 2 → 3: 参照 ID 列から作った自動リンクは消え、手動リンクは残る。同じ文書内の関係を作れるようになる。"""
+    import json
+    import sqlite3
+
+    path = tmp_path / "v2.db"
+    db = Database(path)  # 新しい形で作ってから、版 2 の形に戻す
+    db.close()
+    conn = sqlite3.connect(path)
+    scr_schema_v2 = {"columns": [{"key": "s", "name": "ID", "type": "id"},
+                                 {"key": "r", "name": "上位", "type": "string", "ref_document_id": 1}]}
+    conn.executescript(
+        f"""
+        PRAGMA foreign_keys = OFF;
+        DROP TABLE links; DROP TABLE relations;
+        CREATE TABLE relations (id INTEGER PRIMARY KEY AUTOINCREMENT,
+          upper_doc_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+          lower_doc_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+          UNIQUE (upper_doc_id, lower_doc_id), CHECK (upper_doc_id <> lower_doc_id));
+        CREATE TABLE links (id INTEGER PRIMARY KEY AUTOINCREMENT, relation_id INTEGER NOT NULL REFERENCES relations(id) ON DELETE CASCADE,
+          upper_item_id TEXT NOT NULL, lower_item_id TEXT NOT NULL, manual INTEGER NOT NULL DEFAULT 0,
+          auto_by_upper INTEGER NOT NULL DEFAULT 0, auto_by_lower INTEGER NOT NULL DEFAULT 0, auto_disabled INTEGER NOT NULL DEFAULT 0,
+          upper_hash_ack TEXT, lower_hash_ack TEXT, created_at TEXT NOT NULL, UNIQUE (relation_id, upper_item_id, lower_item_id));
+        UPDATE meta SET value = '2' WHERE key = 'schema_version';
+        INSERT INTO documents(id, name, schema_json, created_at) VALUES (1, 'A', '{{"columns": []}}', 't');
+        INSERT INTO documents(id, name, schema_json, created_at) VALUES (2, 'B', '{json.dumps(scr_schema_v2)}', 't');
+        INSERT INTO relations VALUES (1, 1, 2);
+        INSERT INTO links VALUES (1, 1, 'X', 'Y', 0, 0, 1, 0, 'h', 'h', 't');
+        INSERT INTO links VALUES (2, 1, 'X', 'Z', 1, 0, 1, 0, 'h', 'h', 't');
+        """
+    )
+    conn.close()
+    db = Database(path)
+    with db.tx() as c:
+        assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == "3"
+        rows = c.execute("SELECT id, manual, auto_by_lower, auto_by_table FROM links").fetchall()
+        assert [tuple(r) for r in rows] == [(2, 1, 0, 0)]
+        assert json.loads(c.execute("SELECT schema_json FROM documents WHERE id = 2").fetchone()[0])["columns"][1]["ref_document_id"] is None
+        c.execute("INSERT INTO relations(upper_doc_id, lower_doc_id) VALUES (2, 2)")  # CHECK 制約が外れている
+        assert c.execute("PRAGMA foreign_key_check").fetchall() == []
     db.close()
 
 
@@ -301,9 +402,10 @@ def test_tab_and_space_delimiters():
 def test_missing_ref_marked_invalid(client):
     req, scr, rel = setup(client)
     do_import(client, req, "req.csv", req_csv())
-    vid = do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)["version_id"]
+    do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)
+    vid = ok(client.get(f"/api/documents/{link_doc(client, scr)}"))["latest_version_id"]
     res = ok(client.get(f"/api/versions/{vid}/items", params={"f.__invalid": "1"}))
-    assert [i["item_id"] for i in res["items"]] == ["SCR-04"]
+    assert [i["data"]["llo"] for i in res["items"]] == ["SCR-04"]  # 関連表の REQ-999 の行
 
 
 def test_xlsx_formatted_far_rows_are_ignored():

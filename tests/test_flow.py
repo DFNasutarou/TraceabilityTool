@@ -13,12 +13,26 @@ REQ_SCHEMA = {
 }
 
 
-def scr_schema(req_id):
+def scr_schema(req_id=None):
+    """画面定義書。上位要件の列は普通の文字列の列（つながりは関連表で表す）。"""
     return {
         "columns": [
             {"key": "sid", "name": "画面ID", "type": "id"},
             {"key": "sname", "name": "画面名", "type": "string"},
-            {"key": "sref", "name": "上位要件", "type": "string", "list": {"delimiters": [";"]}, "ref_document_id": req_id},
+            {"key": "sref", "name": "上位要件", "type": "string", "list": {"delimiters": [";"]}},
+        ]
+    }
+
+
+def link_schema(req_id, scr_id):
+    """要件-画面対応表（関連表）。画面定義書と同じファイルを取り込み、上位要件 → 画面ID のつながりを作る。"""
+    return {
+        "columns": [
+            {"key": "lid", "name": "対応ID", "type": "id", "auto_id": {"prefix": "L-", "digits": 3, "start": 1}},
+            {"key": "lup", "name": "上位要件", "type": "string", "list": {"delimiters": [";"]},
+             "ref_document_id": req_id, "link_role": "upper"},
+            {"key": "llo", "name": "画面", "source_header": "画面ID", "type": "string",
+             "ref_document_id": scr_id, "link_role": "lower"},
         ]
     }
 
@@ -29,6 +43,16 @@ def ok(resp):
 
 
 def do_import(client, doc_id, filename, data, schema=None, header_row=1, sheets=None, label=""):
+    """取り込む。setup() で画面定義書に関連表を対応させている場合は、同じファイルを関連表にも取り込む
+    （画面定義書の上位要件の列からつながりを作るため）。"""
+    result = _import(client, doc_id, filename, data, schema, header_row, sheets, label)
+    link = getattr(client, "link_tables", {}).get(doc_id)
+    if link is not None and "version_id" in result:
+        _import(client, link, filename, data, None, header_row, sheets, "")
+    return result
+
+
+def _import(client, doc_id, filename, data, schema=None, header_row=1, sheets=None, label=""):
     start = ok(client.post("/api/imports", data={"document_id": doc_id}, files={"file": (filename, data)}))
     sid = start["session_id"]
     settings = ok(
@@ -62,7 +86,13 @@ def setup(client):
     scr = ok(client.post("/api/documents", json={"name": "画面定義書"}))["id"]
     ok(client.put(f"/api/documents/{scr}", json={"name": "画面定義書", "schema": scr_schema(req)}))
     rel = ok(client.post("/api/relations", json={"upper_doc_id": req, "lower_doc_id": scr}))["id"]
+    link = ok(client.post("/api/documents", json={"name": "要件-画面対応表", "schema": link_schema(req, scr)}))["id"]
+    client.link_tables = {scr: link}
     return req, scr, rel
+
+
+def link_doc(client, scr):
+    return client.link_tables[scr]
 
 
 def scr_xlsx():
@@ -160,7 +190,7 @@ def test_full_flow(client):
 
     # 一覧
     docs = ok(client.get("/api/documents"))
-    assert [d["latest"]["version_no"] for d in docs] == [2, 2]
+    assert [d["latest"]["version_no"] for d in docs] == [2, 2, 2]  # 要件定義書・画面定義書・要件-画面対応表
     rels = ok(client.get("/api/relations"))
     assert rels[0]["upper_untraced"] == 0
 
@@ -174,12 +204,34 @@ def test_import_errors_block_commit(client):
     assert any("重複" in m for m in messages) and any("空" in m for m in messages)
 
 
-def test_ref_column_requires_relation(client):
+def test_link_table_requires_relation(client):
     req = ok(client.post("/api/documents", json={"name": "要件", "schema": REQ_SCHEMA}))["id"]
-    scr = ok(client.post("/api/documents", json={"name": "画面", "schema": scr_schema(req)}))["id"]
+    scr = ok(client.post("/api/documents", json={"name": "画面", "schema": scr_schema()}))["id"]
+    link = ok(client.post("/api/documents", json={"name": "対応表", "schema": link_schema(req, scr)}))["id"]
     data = make_csv([["画面ID", "画面名", "上位要件"], ["S1", "a", "R1"]])
-    v = do_import(client, scr, "s.csv", data)
+    v = do_import(client, link, "s.csv", data)
     assert v["error_count"] == 1 and "トレース関係" in v["errors"][0]["message"]
+
+
+def test_ref_column_only_in_link_table(client):
+    """仕様書 B に A のキーを書く方式（関連表のキーでない参照 ID 列）は使えない。"""
+    req = ok(client.post("/api/documents", json={"name": "要件", "schema": REQ_SCHEMA}))["id"]
+    schema = scr_schema()
+    schema["columns"][2]["ref_document_id"] = req
+    r = client.post("/api/documents", json={"name": "画面", "schema": schema})
+    assert r.status_code == 400 and "関連表のキー" in r.json()["error"]["message"]
+    # 関連表には上位側・下位側のキーが 1 つずつ必要
+    scr = ok(client.post("/api/documents", json={"name": "画面", "schema": scr_schema()}))["id"]
+    bad = link_schema(req, scr)
+    bad["columns"][2]["link_role"] = "upper"
+    r = client.post("/api/documents", json={"name": "対応表", "schema": bad})
+    assert r.status_code == 400 and "1 つずつ" in r.json()["error"]["message"]
+
+
+def test_link_table_cannot_be_in_relation(client):
+    req, scr, rel = setup(client)
+    r = client.post("/api/relations", json={"upper_doc_id": link_doc(client, scr), "lower_doc_id": req})
+    assert r.status_code == 400 and "関連表" in r.json()["error"]["message"]
 
 
 def test_relation_cycle_rejected(client):
@@ -206,15 +258,16 @@ def test_first_import_proposes_schema_and_multisheet(client):
 
 def test_delete_latest_version_regenerates_links(client):
     req, scr, rel = setup(client)
+    link = link_doc(client, scr)
     do_import(client, req, "req.csv", req_csv())
     do_import(client, scr, "scr.xlsx", scr_xlsx(), header_row=2)
     data = make_csv([["画面ID", "画面名", "上位要件"], ["SCR-01", "ログイン画面", "REQ-001"]])
-    v2 = do_import(client, scr, "scr2.csv", data)["version_id"]
+    v2 = do_import(client, link, "scr2.csv", data)["version_id"]  # 関連表だけを取り込み直す
     assert len(ok(client.get(f"/api/trace/{rel}"))["links"]) == 1
     ok(client.delete(f"/api/versions/{v2}"))
     assert len(ok(client.get(f"/api/trace/{rel}"))["links"]) == 4
-    versions = ok(client.get(f"/api/documents/{scr}/versions"))
+    versions = ok(client.get(f"/api/documents/{link}/versions"))
     assert [v["version_no"] for v in versions] == [1]
     # 削除した版の番号は再利用しない
-    v3 = do_import(client, scr, "scr2.csv", data)["version_id"]
-    assert ok(client.get(f"/api/documents/{scr}/versions"))[0]["version_no"] == 3
+    do_import(client, link, "scr2.csv", data)
+    assert ok(client.get(f"/api/documents/{link}/versions"))[0]["version_no"] == 3

@@ -1,7 +1,7 @@
 import { api, download, fmtDate, fmtPct, toast } from "../api.js";
 import { href } from "../router.js";
 
-const { ref, onMounted } = Vue;
+const { ref, computed, onMounted } = Vue;
 
 export default {
   setup() {
@@ -30,7 +30,7 @@ export default {
     }
 
     async function deleteRelation(r) {
-      if (!confirm(`「${r.upper_name} → ${r.lower_name}」の関係を削除します。\nこの関係のリンク（手動リンクを含む）もすべて削除されます。よろしいですか？`)) return;
+      if (!confirm(`「${relName(r)}」の関係を削除します。\nこの関係のリンク（手動リンクを含む）もすべて削除されます。よろしいですか？`)) return;
       await api.del(`/api/relations/${r.relation.id}`);
       toast("トレース関係を削除しました");
       load();
@@ -38,6 +38,17 @@ export default {
 
     const dataDir = ref("");
     onMounted(load);
+    // 関連表（つながりを表す文書）: 上位側・下位側のキーの参照先の名前
+    const docName = (id) => docs.value.find((d) => d.id === id)?.name || "?";
+    function linkInfo(d) {
+      const cols = d.schema?.columns || [];
+      const up = cols.find((c) => c.link_role === "upper"), lo = cols.find((c) => c.link_role === "lower");
+      if (!up && !lo) return null;
+      if (up?.ref_document_id && up.ref_document_id === lo?.ref_document_id) return docName(up.ref_document_id) + " 内";
+      return (up?.ref_document_id ? docName(up.ref_document_id) : "?") + " → " + (lo?.ref_document_id ? docName(lo.ref_document_id) : "?");
+    }
+    const itemDocs = computed(() => docs.value.filter((d) => !linkInfo(d)));
+    const relName = (r) => (r.relation.upper_doc_id === r.relation.lower_doc_id ? `${r.upper_name}（文書内）` : `${r.upper_name} → ${r.lower_name}`);
     onMounted(async () => {
       dataDir.value = (await api.get("/api/info")).data_dir || "";
     });
@@ -45,7 +56,7 @@ export default {
       await api.post("/api/open-data-dir");
       toast(`保存先フォルダを開きました: ${dataDir.value}`);
     }
-    return { dataDir, openDataDir, docs, relations, newRel, loading, loaded, addRelation, deleteRelation, href, fmtDate, fmtPct, download };
+    return { dataDir, openDataDir, linkInfo, itemDocs, relName, docs, relations, newRel, loading, loaded, addRelation, deleteRelation, href, fmtDate, fmtPct, download };
   },
   template: `
     <section class="page">
@@ -72,6 +83,7 @@ export default {
             <td>
               <a v-if="d.latest" :href="href('/documents/' + d.id + '/items')"><b>{{ d.name }}</b></a>
               <b v-else>{{ d.name }}</b>
+              <span v-if="linkInfo(d)" class="badge link" title="つながりを表す文書。各行から上位 → 下位のリンクを作ります">関連表: {{ linkInfo(d) }}</span>
               <div class="sub">{{ d.description }}</div>
             </td>
             <td>
@@ -116,7 +128,7 @@ export default {
         <tbody>
           <tr v-for="r in relations" :key="r.relation.id">
             <td>
-              <a :href="href('/trace/' + r.relation.id)" title="トレース状況を開く"><b>{{ r.upper_name }} → {{ r.lower_name }}</b></a>
+              <a :href="href('/trace/' + r.relation.id)" title="トレース状況を開く"><b>{{ relName(r) }}</b></a>
             </td>
             <td class="num">
               {{ fmtPct(r.upper_coverage) }}
@@ -138,18 +150,19 @@ export default {
           </tr>
         </tbody>
       </table>
-      <p v-else-if="docs.length >= 2" class="empty">トレース関係がありません。下のフォームで「上位文書 → 下位文書」を登録してください。</p>
+      <p v-else-if="itemDocs.length >= 1" class="empty">トレース関係がありません。下のフォームで「上位文書 → 下位文書」を登録してください。</p>
       <p v-else class="empty">トレース関係がありません。文書を 2 つ以上登録すると、ここで「上位文書 → 下位文書」の関係を登録できます（取り込み画面で参照先を選んだときにも登録できます）。</p>
 
-      <div class="inline-form" v-if="docs.length >= 2">
+      <div class="inline-form" v-if="itemDocs.length >= 1">
         <label>上位
-          <select v-model="newRel.upper"><option value="">選択…</option><option v-for="d in docs" :key="d.id" :value="d.id">{{ d.name }}</option></select>
+          <select v-model="newRel.upper"><option value="">選択…</option><option v-for="d in itemDocs" :key="d.id" :value="d.id">{{ d.name }}</option></select>
         </label>
         <span>→</span>
         <label>下位
-          <select v-model="newRel.lower"><option value="">選択…</option><option v-for="d in docs" :key="d.id" :value="d.id" :disabled="d.id === newRel.upper">{{ d.name }}</option></select>
+          <select v-model="newRel.lower"><option value="">選択…</option><option v-for="d in itemDocs" :key="d.id" :value="d.id">{{ d.name }}{{ d.id === newRel.upper ? '（文書内のつながり）' : '' }}</option></select>
         </label>
         <button class="btn primary" :disabled="!newRel.upper || !newRel.lower" @click="addRelation">関係を追加</button>
+        <span class="sub">上位と下位に同じ文書を選ぶと、文書内のつながり（画面遷移など）の関係になります。つながりそのものは関連表で作ります。</span>
       </div>
 
       <div v-if="dataDir" class="data-dir">

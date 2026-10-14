@@ -50,7 +50,7 @@ DAT-04,データモデル,リスト形式,"list: {""delimiters"": [...]} で区�
 画面では改行とタブをチェックボックスで指定し、それ以外の区切り文字はスペース区切りで入力する（空白そのものは \s と書く）。",tracetool/colschema.py;tracetool/static/views/schema-editor.js,F-03
 DAT-05,データモデル,bool の真偽文字列,"bool_values: {""true"": [...], ""false"": [...]}。既定値は true: ○ ◯ 〇 Yes Y TRUE 1 有 あり、false: × ✕ ✖ No N FALSE 0 無 なし。
 比較は Unicode NFKC 正規化と大文字小文字の無視（casefold）をしたうえで行う。真と偽に同じ文字列がある定義はエラー。",tracetool/colschema.py,F-02
-DAT-06,データモデル,参照 ID 列,ref_document_id に参照先の文書 ID を持つ。この文書と参照先文書の間にトレース関係があることが取り込みの条件。,tracetool/colschema.py;tracetool/importer.py,F-04
+DAT-06,データモデル,関連表,関連表の列: link_role（upper / lower）と ref_document_id（参照先の文書 ID）を組で持つ。関連表には upper と lower の列がちょうど 1 つずつ必要。ref_document_id は関連表のキーの列でだけ指定できる（関連表でない文書の参照 ID 列は廃止）。自分自身は参照先にできない。上位側の参照先 → 下位側の参照先のトレース関係（同じ文書なら文書内の関係）があることが取り込み・編集の条件。関連表は関係の上位・下位にできない。,tracetool/colschema.py;tracetool/importer.py;tracetool/services/relations.py,F-04;F-47;T-07
 DAT-07,データモデル,表示列,display_column に「ID と一緒に表示する列」のキーを持つ。未指定なら ID 列の次の列。リンク一覧や出力で使う。,tracetool/colschema.py,F-62;F-70
 DAT-08,データモデル,値の正規化（共通・リスト）,"前後の空白を除去し、空文字は null にする。
 リスト形式は区切り文字で分割し、各要素の前後の空白を除去し、空要素を捨てて配列にする。要素ごとに型の変換を行う。
@@ -69,18 +69,19 @@ DAT-14,データモデル,テーブル: versions,"versions(id INTEGER PRIMARY KE
 最新版は version_no が最大のもの。",tracetool/db.py,F-05;F-17;F-46;T-02
 DAT-15,データモデル,テーブル: items,"items(version_id → versions ON DELETE CASCADE, item_id TEXT  -- ID 列の値, row_no INTEGER  -- 取り込み順, data_json TEXT  -- {列キー: 正規化後の値}, invalid_json TEXT  -- 警告になった列キー, content_hash TEXT, PRIMARY KEY(version_id, item_id))
 元ファイルは保存せず、変換後の値だけを保存する。",tracetool/db.py,F-18;F-21;T-03
-DAT-16,データモデル,テーブル: relations,"relations(id INTEGER PRIMARY KEY AUTOINCREMENT, upper_doc_id → documents ON DELETE CASCADE, lower_doc_id → documents ON DELETE CASCADE, UNIQUE(upper_doc_id, lower_doc_id), CHECK(upper_doc_id <> lower_doc_id))",tracetool/db.py,F-40;T-05
-DAT-17,データモデル,テーブル: links,"links(id INTEGER PRIMARY KEY AUTOINCREMENT, relation_id → relations ON DELETE CASCADE, upper_item_id TEXT, lower_item_id TEXT, manual INTEGER  -- 手動で追加, auto_by_upper INTEGER  -- 上位文書の参照 ID 列から生成, auto_by_lower INTEGER  -- 下位文書の参照 ID 列から生成, auto_disabled INTEGER  -- 自動リンクを利用者が無効化, upper_hash_ack TEXT, lower_hash_ack TEXT  -- 確認時点のハッシュ, created_at TEXT, UNIQUE(relation_id, upper_item_id, lower_item_id))
+DAT-16,データモデル,テーブル: relations,"relations(id INTEGER PRIMARY KEY AUTOINCREMENT, upper_doc_id → documents ON DELETE CASCADE, lower_doc_id → documents ON DELETE CASCADE, UNIQUE(upper_doc_id, lower_doc_id))  -- upper_doc_id = lower_doc_id は文書内の関係",tracetool/db.py,F-40;T-05
+DAT-17,データモデル,テーブル: links,"links(id INTEGER PRIMARY KEY AUTOINCREMENT, relation_id → relations ON DELETE CASCADE, upper_item_id TEXT, lower_item_id TEXT, manual INTEGER  -- 手動で追加, auto_by_table INTEGER  -- 関連表の行から生成, auto_disabled INTEGER  -- 自動リンクを利用者が無効化, auto_by_upper / auto_by_lower INTEGER  -- 版 2 までの参照 ID 列からの生成（廃止。常に 0）, upper_hash_ack TEXT, lower_hash_ack TEXT  -- 確認時点のハッシュ, created_at TEXT, UNIQUE(relation_id, upper_item_id, lower_item_id))
 リンクは文書とは別に、項目 ID の組で持つ（多対多）。種別・コメントは持たない。",tracetool/db.py,F-41;F-44;T-06;X-04;G-01
 DAT-18,データモデル,ID の再利用防止と DB の移行,"ID 列は AUTOINCREMENT にし、削除した文書・版・関係・リンクの ID を再利用しない（再利用すると、残っている参照が無関係の新しい行を指すため）。版番号も meta に最大値を残し、削除しても再利用しない。
-スキーマ版 1 の DB は、起動時に表を作り直して版 2 に移行する。",tracetool/db.py;tracetool/importer.py,F-01;F-17;F-32
+スキーマ版 1 の DB は、起動時に表を作り直して版 2 に移行する（旧表の列を名前で指定して写す）。
+版 2 → 3: relations の CHECK 制約を外す（表を作り直す）、links に auto_by_table を足す、参照 ID 列から作った自動リンク（manual = 0）を削除し、残った手動リンクの auto_by_upper / auto_by_lower / auto_disabled を 0 にする、文書の作業中のカラム定義から関連表のキーでない参照 ID 列の参照先を外す。",tracetool/db.py;tracetool/importer.py,F-01;F-17;F-32
 DAT-19,データモデル,文書の削除,文書を削除するときは、他の文書の作業中カラム定義にある、その文書への ref_document_id を外す。削除の確認画面で、影響を受ける文書名を表示する。,tracetool/services/documents.py;tracetool/static/views/docsettings.js,F-01
 DAT-20,データモデル,接続とキャッシュ,"SQLite の接続は 1 本を共有し、ロックで直列化する（個人利用で同時編集は無いため）。
 版 ID → 項目一覧・ハッシュ表をキャッシュする。版は基本的に不変なので、版・文書の削除時、版の書き換え（PRC-28）時、ロールバック時のみ破棄する。
 トレース評価の結果（関係ごと・文書ごと）は、書き込みのトランザクションのたびに破棄する。
 項目一覧の検索・ソート・絞り込みは、版単位で項目をメモリに読み込んで Python 側で行う。",tracetool/db.py;tracetool/services/versions.py;tracetool/services/trace.py,N-02;C-04;C-06;X-01
 DAT-21,データモデル,リンクの有効判定,"1 つの（上位項目, 下位項目）の組に対してリンク行は 1 行だけとし、生成元をフラグで持つ。
-有効 = manual OR ((auto_by_upper OR auto_by_lower) AND NOT auto_disabled)",tracetool/services/links.py,F-42;F-43
+有効 = manual OR (auto_by_table AND NOT auto_disabled)",tracetool/services/links.py,F-42;F-43
 DAT-22,データモデル,リンクの操作規則,"手動で追加: 行が無ければ作成。manual=1、auto_disabled=0、確認ハッシュに現在のハッシュを設定する。
 手動で削除: manual=0。自動フラグが立っていれば auto_disabled=1（無効化）。すべてのフラグが 0 になったら行を削除する。
 元に戻す: auto_disabled=0。
@@ -110,20 +111,18 @@ PRC-08,処理,列の対応付け,"1. ファイルのヘッダごとに、カラ�
 5. 確定時に、変更後のカラム定義を文書の作業中定義として保存し、同じものを版にも保存する。
 取り込み画面で前のステップに戻っても、編集したカラム定義は保持し、ファイルの列との対応付けだけを更新する。
 ファイルの列の選択肢は、どの列にも対応付けていない列（「ファイルの列」）を上に、他の列に対応付け済みの列（使っている列名を添える）を下にまとめる。",tracetool/importer.py;tracetool/static/views/import.js,F-15;F-05
-PRC-09,処理,検証,"エラー（確定できない）: カラム定義の誤り / ID 列が無い / ID 列が対応付けられていない（自動採番の場合を除く） / ID の空欄 / ID の重複 / 複数シートのヘッダ不一致 / 参照 ID 列の参照先とのトレース関係が無い（メッセージで、列の設定の「関係を登録」ボタンか文書一覧の「トレース関係」で登録するよう案内する）
+PRC-09,処理,検証,"エラー（確定できない）: カラム定義の誤り / ID 列が無い / ID 列が対応付けられていない（自動採番の場合を除く） / ID の空欄 / ID の重複 / 複数シートのヘッダ不一致 / 関連表の上位側 → 下位側の参照先の間にトレース関係が無い（メッセージで、カラム定義の「関係を登録」ボタンか文書一覧の「トレース関係」で登録するよう案内する）
 警告（確定できる）: 整数に変換できない / bool に変換できない / 定義外の enum 値 / 参照 ID が参照先文書の最新版に存在しない / 参照先文書が未取り込み / ファイルに無い列がある
 エラー・警告は件数と該当行（最大 1,000 件）を表示する。",tracetool/importer.py,F-16;F-47
 PRC-10,処理,確定,1 トランザクションで行う: versions に行を追加 → items に全行を一括挿入 → documents.schema_json を更新 → 自動リンクを再生成（PRC-13）→ コミット。途中で例外が起きたらロールバックする。,tracetool/importer.py;tracetool/db.py,N-04;N-01;F-17
 PRC-11,処理,版の削除,最新版を削除した場合は、その文書の自動リンクを新しい最新版から再生成する（PRC-13）。版が 1 つも無くなった場合は、その文書が生成元の自動フラグをすべて 0 にする。,tracetool/services/versions.py;tracetool/app.py,F-32
-PRC-12,処理,トレース関係の作成・削除,"作成時は循環しないことを確認する（下位から上位へたどれる場合はエラー）。作成時に両文書の自動リンクを再生成する。
+PRC-12,処理,トレース関係の作成・削除,"作成時は循環しないことを確認する（下位から上位へたどれる場合はエラー。文書内の関係は循環の判定に含めない）。関連表は上位・下位にできない。作成時に自動リンクを再生成する（PRC-13）。
 関係を削除すると、その関係のリンクはすべて削除される（ON DELETE CASCADE）。",tracetool/services/relations.py;tracetool/app.py,F-40
-PRC-13,処理,自動リンクの再生成,"文書 D の最新版を対象に、D の参照 ID 列ごとに次を行う。
-1. 参照先文書 R と D の間のトレース関係を特定する（D が上位なら auto_by_upper、下位なら auto_by_lower）。
-2. D の各項目について、参照 ID 列の値（リスト形式なら各要素）から（上位 ID, 下位 ID）の組の集合 S を作る。
-3. 既存のリンクのうち、該当フラグが 1 で S に含まれない行はフラグを 0 にする（すべてのフラグが 0 で manual=0 なら行を削除）。
-4. S に含まれる組は、行が無ければ作成し、該当フラグを 1 にする。新しい行の確認ハッシュは現在のハッシュ。既存行の確認ハッシュと auto_disabled は変えない。
-取り込みの確定時、版の削除時、関係の作成時に行う。",tracetool/services/links.py,F-42;F-44
-PRC-14,処理,確認ハッシュの補完,"PRC-13 の後に、確認ハッシュが空（NULL）のリンクのうち、D 側の項目が D の最新版に存在するものに現在のハッシュを入れる。
+PRC-13,処理,自動リンクの再生成,"すべての関連表の最新版から、(上位側の参照先, 下位側の参照先) ごとに（上位 ID, 下位 ID）の組の集合 S を作る（キーがリスト形式なら全組み合わせ）。関係ごとに次を行う。
+1. 既存のリンクのうち、auto_by_table = 1 で S に含まれない行は auto_by_table を 0 にする（manual = 0 なら行を削除）。
+2. S に含まれる組は、行が無ければ作成し、auto_by_table を 1 にする。新しい行の確認ハッシュは現在のハッシュ。既存行の確認ハッシュと auto_disabled は変えない。
+関連表の数は多くないため、取り込みの確定時、編集の保存時、版の削除・整理時、文書の削除時、関係の作成時に、毎回すべての関係を作り直す。項目詳細では、(上位 ID, 下位 ID) ごとに、その組を作った関連表の行（文書・項目 ID・表示列）を返す。",tracetool/services/links.py,F-42;F-44
+PRC-14,処理,確認ハッシュの補完,"PRC-13 の後に、確認ハッシュが空（NULL）のリンクのうち、D 側の項目が D の最新版に存在するものに（文書内の関係では上位側・下位側の両方で）現在のハッシュを入れる。
 リンクを作った時点で相手の項目がまだ無かった場合（相手文書が未取り込み、リンク切れのまま作成・確認した場合）、確認ハッシュは空になる。項目が現れた時点のハッシュを基準にしないと、取り込みの順番だけでリンクが要確認になってしまうため。",tracetool/services/links.py,F-45
 PRC-15,処理,トレースの評価,"トレース関係 (U → L) ごとに、U と L の最新版を使って計算する。
 上位未トレース（下位なし）: U の項目で、有効なリンクのうち下位項目が L の最新版に存在するものが 0 本
@@ -162,10 +161,12 @@ PRC-28,処理,編集の保存,"POST /api/documents/{id}/edit で、最新版を�
 PRC-29,処理,選択式の絞り込み,"enum・bool の列は、選んだ選択肢のどれかに当てはまる項目を残す。リスト形式ならどれかの要素が当てはまればよい。
 「選択肢に無い値」（enum の定義外の値、真偽のどちらでもない bool の値）は __other__、「空欄」は __empty__ で表す。enum・bool 以外の列の指定は無視する。",tracetool/services/items.py,F-61
 PRC-30,処理,ID の付け直し,"各行の orig_id と今の ID が違えば、{古い ID: 新しい ID} として扱う。新しい ID が編集前に別の項目で使われていた場合（入れ替え・削除した項目の ID の再利用）はエラーにする。
-1. リンク: この文書が関わる関係ごとに、この文書側の項目 ID が古い ID のリンクを、一意制約にかからないよう全部消してから新しい ID で入れ直す（行 ID・生成元のフラグ・確認ハッシュは引き継ぐ）。同じ組のリンクが既にあれば（新しい ID へのリンク切れなど）、生成元のフラグをまとめて 1 行にし、確認ハッシュは付け替えた側（元のリンク）の値を優先する。
+1. リンク: この文書が関わる関係ごとに（文書内の関係は上位側・下位側の両方で）、この文書側の項目 ID が古い ID のリンクを、一意制約にかからないよう全部消してから新しい ID で入れ直す（行 ID・生成元のフラグ・確認ハッシュは引き継ぐ）。同じ組のリンクが既にあれば（新しい ID へのリンク切れなど）、生成元のフラグをまとめて 1 行にし、確認ハッシュは付け替えた側（元のリンク）の値を優先する。
 2. 確認ハッシュ: この文書側の確認ハッシュが編集前のハッシュと同じなら、「編集前の値の ID だけを変えた」ハッシュに付け替える（ID 以外を変えていなければ要確認にならず、変えていれば要確認になる）。
-3. 参照元の文書: 最新版のカラム定義でこの文書を参照先にしている文書の最新版で、参照 ID 列の古い ID を新しい ID に書き換え、内容ハッシュを計算し直す（版は増やさない。import_settings に ids_renamed_at を記録する）。書き換えた項目側の確認ハッシュが書き換え前のハッシュと同じなら、参照元の文書が持つすべての関係で新しいハッシュに付け替える（参照元のさらに下位とのリンクも要確認にしない）。書き換えた列と、新しい ID を元から参照していた列は、参照先がすべてそろえば警告（参照先に無い ID）を外す。
+3. 参照元の関連表: 最新版のカラム定義でこの文書をキーの参照先にしている関連表の最新版で、キーの列の古い ID を新しい ID に書き換え、内容ハッシュを計算し直す（版は増やさない。import_settings に ids_renamed_at を記録する）。書き換えた項目側の確認ハッシュが書き換え前のハッシュと同じなら、参照元の文書が持つすべての関係で新しいハッシュに付け替える（参照元のさらに下位とのリンクも要確認にしない）。書き換えた列と、新しい ID を元から参照していた列は、参照先がすべてそろえば警告（参照先に無い ID）を外す。
 POST /api/documents/{id}/rename-impact で、保存前に付け直すリンクの数（相手の文書ごと）と、参照元の文書ごとの項目を返す。",tracetool/services/renaming.py;tracetool/services/editing.py,F-83
+PRC-31,処理,版の整理,POST /api/versions/{vid}/make-first: 選んだ版以外の版をすべて削除し、選んだ版の版番号を 1 にする。版番号の最大値の記録（meta）も 1 にする（次の取り込みは v2）。キャッシュを捨て、自動リンクを再生成する（古い版を選んだ場合はその版が最新版になる）。,tracetool/services/versions.py;tracetool/app.py,F-32
+PRC-32,処理,画像の表示,GET /api/image?doc=&key=&path=: 文書の作業中のカラム定義で画像の列（image.base_dir）に指定した基準フォルダと、セルの値（相対パス。\ は / とみなす）からファイルを求め、実体のパス（リンクをたどった先）が基準フォルダの下にあり、拡張子が画像（png / jpg / jpeg / gif / bmp / webp）の場合だけ返す。SVG はスクリプトを含み得るため対象外。他のサイトの画面から読み込ませないよう、Sec-Fetch-Site が same-origin / none 以外ならエラーにする。基準フォルダは絶対パスでなければカラム定義の誤りにする。,tracetool/images.py;tracetool/app.py;tracetool/colschema.py,F-59;C-01
 API-01,API,共通,"すべて JSON。パスの接頭辞は /api。本文は型付きモデル（Pydantic）で受け取る。
 エラーは {""error"": {""code"": ""..."", ""message"": ""日本語のメッセージ""}} で返す。項目 ID はパスではなくクエリで渡す（ID に / などが含まれ得るため）。",tracetool/app.py,C-02;N-05
 API-02,API,GET /documents,文書一覧（最新版、版の数、上位なし・下位なし・要確認・リンク切れの件数を含む）。,tracetool/app.py,F-60
@@ -178,10 +179,10 @@ API-08,API,GET /documents/{id}/find?q=,リンク追加用に、最新版から I
 API-09,API,DELETE /versions/{vid},版を削除する（PRC-11）。,tracetool/app.py,F-32
 API-10,API,GET /versions/{vid}/items,"項目一覧。クエリ: q（全文）、f.<列キー>（列ごとの部分一致。f.__invalid で警告セルのある行のみ）、m.<列キー>（enum・bool の選択式の絞り込み。複数指定可。PRC-29）、sort（列キー / upper_count / lower_count）、desc、trace（no_upper / no_lower / suspect / broken）、page、size。
 応答に、最新版か、上位・下位の関係があるかを含める。",tracetool/app.py;tracetool/services/items.py,F-61;F-63;F-64
-API-11,API,GET /versions/{vid}/item?id=,項目の詳細と、関係ごとの上位・下位のリンク（状態付き。無効化した自動リンクも含む）。リンクは相手文書での並び順（リンク切れは最後）に並べる。,tracetool/app.py;tracetool/services/items.py,F-62
+API-11,API,GET /versions/{vid}/item?id=,項目の詳細と、関係ごとの上位・下位のリンク（状態付き。無効化した自動リンクも含む。文書内の関係は上位・下位の 2 つに分ける。自動リンクには作った関連表の行 sources を付ける）。リンクは相手文書での並び順（リンク切れは最後）に並べる。,tracetool/app.py;tracetool/services/items.py,F-62
 API-12,API,GET /diff?from={vid}&to={vid},2 つの版の差分（PRC-18、PRC-19）。,tracetool/app.py;tracetool/services/diff.py,F-31
 API-13,API,GET /relations,トレース関係の一覧（網羅率・リンク数・要確認・リンク切れの要約付き）。,tracetool/app.py,F-40;F-51
-API-14,API,POST /relations,関係を作成する（PRC-12。循環ならエラー）。,tracetool/app.py,F-40
+API-14,API,POST /relations,関係を作成する（PRC-12。循環ならエラー。上位と下位が同じなら文書内の関係）。POST /versions/{vid}/make-first（PRC-31）、GET /image（PRC-32）。,tracetool/app.py,F-40;F-32;F-59
 API-15,API,DELETE /relations/{rid},関係を削除する。,tracetool/app.py,F-40
 API-16,API,POST /links,手動リンクを追加する（関係、上位 ID、下位 ID）。両方の項目が最新版に存在する必要がある。,tracetool/app.py;tracetool/services/links.py,F-43
 API-17,API,DELETE /links/{lid},リンクを削除する（DAT-22 の規則）。,tracetool/app.py;tracetool/services/links.py,F-43
@@ -205,7 +206,7 @@ UI-01,画面,共通,"ハッシュ形式のルーティング（#/documents/3/ite
 通知は同時に 4 件までとし、古いものから消す。出力の「作成しています」は結果の通知に置き換える。リスト形式の値は、その列の区切り文字（改行・タブ・空白以外の最初のもの）で区切って表示する。",tracetool/static/app.js;tracetool/static/router.js;tracetool/static/api.js;tracetool/static/style.css,N-05;F-70;F-71
 UI-02,画面,S1 ダッシュボード,"文書の一覧（最新版、項目数、上位なし・下位なし・要確認・リンク切れの件数。件数をクリックすると S4 を絞り込んで開く）。
 トレース関係を「上位 → 下位」の一覧で表示し、各関係の網羅率を表示する。関係の追加・削除と、全関係の未トレース一覧の出力（Excel / CSV）もこの画面で行う。
-初回の読み込みが終わるまでは「読み込み中…」と表示し、「文書がありません」「関係がありません」を出さない。トレース関係の表は関係名を 1 列にまとめ、関係名を押すとトレース状況を開く（狭い画面でもはみ出しにくくする）。文書が 2 つ未満のときは、2 つ以上登録すると関係を登録できることを案内する。
+初回の読み込みが終わるまでは「読み込み中…」と表示し、「文書がありません」「関係がありません」を出さない。トレース関係の表は関係名を 1 列にまとめ、関係名を押すとトレース状況を開く（狭い画面でもはみ出しにくくする）。関連表の文書には「関連表: A → B」（文書内なら「A 内」）の印を付ける。関係の登録では関連表を選べず、上位と下位に同じ文書を選ぶと文書内の関係になる（文書内の関係は「A（文書内）」と表示する）。
 上部の帯の右端に「保存先フォルダを開く」ボタン（パスはボタンの説明に出す）を置き、文書一覧の下部にデータの保存先のパスと「フォルダを開く」ボタン、ツールを差し替えてもデータが残ることを示す。",tracetool/static/views/dashboard.js;tracetool/static/app.js,F-60;F-51;F-40;F-71;F-24
 UI-03,画面,S2 文書の設定,"名前・説明。カラム定義の編集（列の追加・削除・並べ替え（⋮⋮ のつまみをドラッグ＆ドロップ、または ↑↓）、型、リスト形式と区切り文字、enum の選択肢、bool の真偽文字列、参照先文書、表示列）。文書の削除。
 詳細設定の内容が増えても、列名の入力欄は幅を固定して縮めない。
@@ -220,16 +221,16 @@ UI-05,画面,S4 項目一覧,"版の選択（既定は最新版。過去の版�
 「上位」「下位」のリンク数と「状態」の列を付け、状態で絞り込める（関係が無い方向は - と表示）。警告セルは強調表示する。
 検索の応答が前後しても、最後に出した要求の結果だけを表示する。
 画面の幅が 900px 以下で詳細パネルが一覧の下に出る場合は、項目を選ぶと詳細パネルまでスクロールする。",tracetool/static/views/items.js,F-61;F-63;F-64;F-16;F-67;F-68;F-69;F-80
-UI-06,画面,S5 項目詳細,"S4 の右側のパネル。全列の値。関係ごとに上位・下位のリンク一覧（相手の ID と表示列、状態、生成元）。
+UI-06,画面,S5 項目詳細,"S4 の右側のパネル。全列の値。関係ごとに上位・下位のリンク一覧（相手の ID と表示列、状態、生成元。文書内の関係は「（文書内）」を添えて上位・下位の両方に出す。自動リンクには「関連表: 〇〇 の L-001」を出し、押すと関連表のその行を開く）。画像のパスの列は画像で表示する。
 リンク先をクリックすると相手文書の S4 に遷移してその項目を選択する。リンクの追加（相手文書の項目を ID・表示列で検索して選ぶ）・削除（自動リンクは無効化）・元に戻す・確認済み。
-無効化したリンクは ID・表示列などだけを薄く・取り消し線にし、「元に戻す」ボタンは強調して押せることが分かるようにする。",tracetool/static/views/items.js,F-62;F-43;F-45
-UI-07,画面,S6 版の一覧・差分,"版の一覧（ラベル、日時、元ファイル名、行数）、版の閲覧・削除（確認ダイアログ）。
+無効化したリンクは ID・表示列などだけを薄く・取り消し線にし、「元に戻す」ボタンは強調して押せることが分かるようにする。",tracetool/static/views/items.js,F-62;F-43;F-45;F-42;F-59
+UI-07,画面,S6 版の一覧・差分,"版の一覧（ラベル、日時、元ファイル名、行数）、版の閲覧・削除（確認ダイアログ）・「この版だけ残して v1 にする」（PRC-31。削除される版と、最新版が変わることを確認ダイアログで示す）。
 2 つの版を選んで差分を表示する（列の変更、項目の追加・削除・変更。変更はセル単位で前後を表示し、実際に変わった文字を濃い色で強調する。文字単位の最長共通部分列で求め、文字数の積が 200 万を超える場合は共通の先頭・末尾以外をまとめて強調する）。差分の出力は表示中の差分の版を使う。",tracetool/static/views/versions.js;tracetool/static/textdiff.js,F-30;F-31;F-32;F-72;F-33
 UI-08,画面,S8 トレース状況,関係を選択し、網羅率、下位なし、上位なし、リンク切れ、要確認、全リンクの各タブを表示する。要確認は選択して一括で確認済みにできる。マトリクス・未トレース一覧の出力。,tracetool/static/views/trace.js,F-50;F-51;F-52;F-70;F-71;G-02
-UI-09,画面,カラム定義の補助操作,"文字列・enum の列に「使われている値から enum を作る」ボタンを置く。押すと値の一覧を確認ダイアログで示し、了承すると型を enum にして選択肢を入れる（取り込み画面ではファイルの値、文書の設定画面では最新版の値を使う）。
-参照 ID 列の参照先との間にトレース関係が無い場合は、その列に警告と「関係を登録（参照先を上位にする）」「下位にする」ボタンを出す。
+UI-09,画面,カラム定義の補助操作,"文字列・enum の列（関連表のキー・画像のパスの列を除く）に「使われている値から enum を作る」ボタンを置く。押すと値の一覧を確認ダイアログで示し、了承すると型を enum にして選択肢を入れる（取り込み画面ではファイルの値、文書の設定画面では最新版の値を使う）。
+文字列の列に「関連表のキー」（キーではない・上位側のキー・下位側のキー）と、キーにした場合の参照先を選ぶ欄、「画像のパス」と基準フォルダの欄を置く。キーの列があれば、列の一覧の上に関連表であることと作られるつながりを説明し、上位側 → 下位側の文書の間にトレース関係が無ければ警告と「関係を登録」ボタンを出す。
 列名・ファイルの列・型の欄は幅を固定する。詳細設定の欄（警告文・ボタン・bool の真偽文字列）は折り返して全文を表示し、狭い画面では真・偽の欄を縦に並べる。enum に変換したときは、選択肢がファイルに出てきた順であることと、欄で直せることを通知する。改行を含む値があり、リスト形式の改行区切りにしていない場合は、改行を含んだまま 1 つの選択肢にしたことと、複数の値を改行で区切っている場合の直し方を通知する。
-「列をまとめて追加」で、列名を区切り文字（自動判定・タブ・カンマ・改行・その他）で区切ったテキストを貼り付けて、文字列型の列をまとめて追加する。同じ名前の列は追加しない。取り込み画面では、同じ名前のファイルの列に対応付ける。",tracetool/static/views/schema-editor.js;tracetool/static/views/import.js;tracetool/static/views/docsettings.js,F-07;F-47;F-04;F-08
+「列をまとめて追加」で、列名を区切り文字（自動判定・タブ・カンマ・改行・その他）で区切ったテキストを貼り付けて、文字列型の列をまとめて追加する。同じ名前の列は追加しない。取り込み画面では、同じ名前のファイルの列に対応付ける。",tracetool/static/views/schema-editor.js;tracetool/static/views/import.js;tracetool/static/views/docsettings.js,F-07;F-47;F-04;F-08;F-59
 UI-10,画面,S9 横並び表示,"#/documents/{id}/side?item= で開く。「上位 ｜ この文書の項目 ｜ 下位」の 3 列に、項目をカード（ID、状態、生成元、全列の値）で並べる。
 中央の列には文書の全項目を順番どおりに縦に並べ、列内でスクロールする。項目を押すとその項目を選び（URL の item を変える）、左右の列を上位・下位に切り替える。中央の列で選んだときはスクロール位置を変えず、前後の移動・初回表示では選んだ項目を列の中央にスクロールする。項目が多い文書でも重くならないよう、選んだ項目の前後 100 件ずつだけを描画し、「前の項目を表示」「次の項目を表示」で広げる。
 カードの中は 12 分割の格子にし、カラム定義の並び順のとおりに、列の幅に応じて欄を並べる（小 = 3、中 = 4、大 = 6、自動・全幅 = 12。1 行に 4 個・3 個・2 個・1 個）。重要度は文字の大きさだけを変える: 低 = 小さめ（11.5px）、中 = 中くらい（13.5px）、高 = 大きめ（16px・太字）。
@@ -252,7 +253,7 @@ SEC-03,セキュリティ,CSRF,GET 以外の要求で、Origin がこのツー�
 SEC-04,セキュリティ,XSS,画面では値を {{ }} で表示し、v-html / innerHTML を使わない。,tracetool/static/views/,C-01
 SEC-05,セキュリティ,外部通信なし,画面のライブラリはすべて同梱し、CDN や外部 URL を参照しない。OpenAPI・ドキュメント画面は無効にする。,tracetool/static/index.html;tracetool/app.py,C-03;N-03
 TST-01,テスト,単体テスト,pytest で、値の正規化、ハッシュ、各形式の読み込み（結合セル・CP932・セル内改行・TSV・日付）、検証を確認する。,tests/test_colschema.py;tests/test_readers.py,F-02;F-03;F-10;F-11;F-14
-TST-02,テスト,API テスト,FastAPI の TestClient で、取り込み → 版の追加 → リンクの引き継ぎ・要確認 → 差分 → 出力 の一連の流れを確認する。取り込みの追加機能（データの範囲、シートのプレビュー、ID の自動採番、セル内の改行と enum）と、編集モードの保存（新しい版・書き換え・検証・衝突・リスト）、選択式の絞り込みを確認する。ID の付け直し（リンク・参照元の文書・要確認の扱い・受け付けない変更）も確認する。,tests/test_flow.py;tests/test_import_options.py;tests/test_editing.py,F-17;F-42;F-44;F-45;F-50;F-12;F-23;F-80;F-82;F-83
+TST-02,テスト,API テスト,FastAPI の TestClient で、取り込み → 版の追加 → リンクの引き継ぎ・要確認 → 差分 → 出力 の一連の流れを確認する。取り込みの追加機能（データの範囲、シートのプレビュー、ID の自動採番、セル内の改行と enum）と、編集モードの保存（新しい版・書き換え・検証・衝突・リスト）、選択式の絞り込みを確認する。ID の付け直し（リンク・参照元の文書・要確認の扱い・受け付けない変更）も確認する。関連表（関係が必要・関連表は関係にできない・関連表を 2 つ合わせる・文書内の関係・削除）、画像の表示（基準フォルダの外・画像以外・他のサイトからは返さない）、版の整理も確認する。,tests/test_flow.py;tests/test_import_options.py;tests/test_editing.py;tests/test_images_versions.py,F-17;F-42;F-44;F-45;F-50;F-12;F-23;F-80;F-82;F-83;F-04;F-59
 TST-03,テスト,回帰テスト,取り込みの順序と要確認、フラグの組み合わせ、複数の関係、文書の削除と ID、DB の移行、出力の内容（制御文字・数式）、Host / Origin の検査、ログに値が書かれないこと、読み込みの細かな条件を確認する。,tests/test_regressions.py,F-43;F-45;C-01
 TST-04,テスト,テストデータ,テストデータはテスト内で生成する。実際の仕様書はリポジトリに置かない。,tests/conftest.py,C-01
 TST-05,テスト,性能の確認,"上位・下位とも 10,000 行・15 列、リンク 2 万本のデータで、取り込み・一覧・検索・トレース評価・出力の時間を測る。

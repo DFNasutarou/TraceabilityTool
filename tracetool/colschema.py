@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import posixpath
 import re
 import secrets
 import unicodedata
@@ -14,6 +15,8 @@ IMPORTANCE = ("low", "mid", "high")
 DEFAULT_IMPORTANCE = "low"
 WIDTHS = ("auto", "s", "m", "l", "full")
 MAX_AUTO_ID_DIGITS = 10
+LINK_ROLES = ("upper", "lower")  # 関連表のキー: 上位側 / 下位側
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")
 
 DEFAULT_BOOL_TRUE = ["○", "◯", "〇", "Yes", "Y", "TRUE", "1", "有", "あり"]
 DEFAULT_BOOL_FALSE = ["×", "✕", "✖", "No", "N", "FALSE", "0", "無", "なし"]
@@ -38,6 +41,40 @@ def id_column(schema: dict) -> dict | None:
         if col.get("type") == "id":
             return col
     return None
+
+
+def link_columns(schema: dict) -> tuple[dict, dict] | None:
+    """関連表の (上位側のキーの列, 下位側のキーの列)。関連表でなければ None。"""
+    up = [c for c in columns(schema) if c.get("link_role") == "upper" and c.get("ref_document_id")]
+    lo = [c for c in columns(schema) if c.get("link_role") == "lower" and c.get("ref_document_id")]
+    if len(up) == 1 and len(lo) == 1:
+        return up[0], lo[0]
+    return None
+
+
+def is_link_table(schema: dict) -> bool:
+    """関連表（2 つのキーの列で、上位の項目と下位の項目のつながりを表す文書）か。"""
+    return any(c.get("link_role") for c in columns(schema))
+
+
+def link_pairs(schema: dict, items: list[dict]) -> set[tuple[str, str]]:
+    """関連表の各行から (上位 ID, 下位 ID) の組を作る。キーがリスト形式なら全組み合わせ。"""
+    cols = link_columns(schema)
+    if cols is None:
+        return set()
+    up, lo = cols
+    pairs: set[tuple[str, str]] = set()
+    for item in items:
+        for u in ref_values(item["data"].get(up["key"])):
+            for low in ref_values(item["data"].get(lo["key"])):
+                pairs.add((u, low))
+    return pairs
+
+
+def is_absolute_path(path: str) -> bool:
+    """Windows・Ubuntu どちらで動かしても、絶対パスかどうかを判定する。"""
+    # Windows: ドライブ名から（C:\ / C:/）、または UNC パス（\\サーバ\共有）。Ubuntu: / から
+    return bool(re.match(r"^[A-Za-z]:[\\/]", path)) or path.startswith("\\\\") or posixpath.isabs(path)
 
 
 def display_column_key(schema: dict) -> str | None:
@@ -73,6 +110,10 @@ def normalize_schema(schema: dict) -> dict:
             # 横並び表示で、列名の後で改行して値を下に置くか（False なら列名を左に置き、長い列名は省略する）
             "label_break": bool(raw.get("label_break")),
             "auto_id": None,
+            # 関連表のキー（upper / lower）。ref_document_id と組で使う
+            "link_role": None,
+            # 画像のパスの列: {"base_dir": 基準フォルダ（絶対パス）}。値は基準フォルダからの相対パス
+            "image": None,
         }
         if col["type"] == "id" and raw.get("auto_id"):
             col["auto_id"] = normalize_auto_id(raw["auto_id"])
@@ -89,6 +130,10 @@ def normalize_schema(schema: dict) -> dict:
             }
         if col["type"] == "string" and raw.get("ref_document_id"):
             col["ref_document_id"] = int(raw["ref_document_id"])
+        if col["type"] == "string" and raw.get("link_role") in LINK_ROLES:
+            col["link_role"] = raw["link_role"]
+        if col["type"] == "string" and raw.get("image"):
+            col["image"] = {"base_dir": str((raw["image"] or {}).get("base_dir") or "").strip()}
         out_cols.append(col)
     return {"columns": out_cols, "display_column": schema.get("display_column")}
 
@@ -152,6 +197,19 @@ def validate_schema(schema: dict) -> list[str]:
                 errors.append(f"bool 列「{label}」で真と偽に同じ文字列があります")
         if col.get("ref_document_id") and col["type"] != "string":
             errors.append(f"参照 ID 列「{label}」は string 型にしてください")
+        if col.get("ref_document_id") and not col.get("link_role"):
+            errors.append(f"列「{label}」: 参照先は、関連表のキー（上位側・下位側）の列でだけ指定できます")
+        if col.get("link_role") and not col.get("ref_document_id"):
+            errors.append(f"関連表のキーの列「{label}」に参照先の文書を指定してください")
+        if col.get("image"):
+            base = col["image"].get("base_dir") or ""
+            if not base:
+                errors.append(f"画像の列「{label}」に基準フォルダを指定してください")
+            elif not is_absolute_path(base):
+                errors.append(f"画像の列「{label}」の基準フォルダは、ドライブ名などから始まる絶対パスで指定してください")
+    roles = [c.get("link_role") for c in cols if c.get("link_role")]
+    if roles and (roles.count("upper") != 1 or roles.count("lower") != 1):
+        errors.append("関連表には、上位側のキーの列と下位側のキーの列を 1 つずつ指定してください")
     return errors
 
 

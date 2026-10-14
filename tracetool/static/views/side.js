@@ -39,7 +39,7 @@ const ItemCard = {
         <span v-if="entry.origin" class="sub">{{ ORIGIN_LABEL[entry.origin] }}</span>
       </div>
       <p v-if="!entry.data" class="err-text small">最新版に存在しない ID です（リンク切れ）。</p>
-      <FieldGrid v-else :columns="schema.columns" :data="entry.data" :invalid="entry.invalid" :wrap="wrap" :min-importance="minImportance" />
+      <FieldGrid v-else :columns="schema.columns" :data="entry.data" :invalid="entry.invalid" :wrap="wrap" :min-importance="minImportance" :doc-id="docId" />
     </div>
   `,
 };

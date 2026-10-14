@@ -55,6 +55,9 @@ export function newColumn(name = "", sourceHeader = null, type = "string") {
     listEnabled: false, delimText: ";", delimNewline: false, delimTab: false, enumValues: [],
     trueText: DEFAULT_TRUE.join("\n"), falseText: DEFAULT_FALSE.join("\n"),
     ref_document_id: "",
+    linkRole: "",
+    imageEnabled: false,
+    imageBase: "",
     importance: "low",
     width: "auto",
     labelBreak: false,
@@ -76,6 +79,9 @@ export function toEdit(schema) {
       trueText: (c.bool_values?.true || DEFAULT_TRUE).join("\n"),
       falseText: (c.bool_values?.false || DEFAULT_FALSE).join("\n"),
       ref_document_id: c.ref_document_id || "",
+      linkRole: c.link_role || "",
+      imageEnabled: !!c.image,
+      imageBase: c.image?.base_dir || "",
       importance: c.importance || "low",
       width: c.width || "auto",
       labelBreak: !!c.label_break,
@@ -95,7 +101,9 @@ export function fromEdit(model) {
       list: c.listEnabled && c.type !== "id" ? { delimiters: editToDelims(c) } : null,
       enum_values: c.type === "enum" ? c.enumValues.map((v) => v.trim()).filter(Boolean) : null,
       bool_values: c.type === "bool" ? { true: lines(c.trueText), false: lines(c.falseText) } : null,
-      ref_document_id: c.type === "string" && c.ref_document_id ? Number(c.ref_document_id) : null,
+      ref_document_id: c.type === "string" && c.linkRole && c.ref_document_id ? Number(c.ref_document_id) : null,
+      link_role: c.type === "string" && c.linkRole ? c.linkRole : null,
+      image: c.type === "string" && c.imageEnabled ? { base_dir: c.imageBase.trim() } : null,
       importance: c.importance || "low",
       width: c.width || "auto",
       label_break: !!c.labelBreak,
@@ -241,18 +249,27 @@ export default {
       }
       changed();
     }
-    const otherDocs = () => props.documents.filter((d) => d.id !== props.selfId);
+    // 関連表のキーの参照先にできる文書（自分自身と、他の関連表は除く）
+    const isLinkTable = (d) => (d.schema?.columns || []).some((c) => c.link_role);
+    const otherDocs = () => props.documents.filter((d) => d.id !== props.selfId && !isLinkTable(d));
     const docName = (id) => props.documents.find((d) => d.id === Number(id))?.name || "";
-    // 参照先との間にトレース関係があるか（参照 ID 列は関係が無いと取り込めない）
-    const hasRelation = (refId) =>
-      props.relations.some(
-        (r) =>
-          (r.upper_doc_id === props.selfId && r.lower_doc_id === Number(refId)) ||
-          (r.lower_doc_id === props.selfId && r.upper_doc_id === Number(refId))
-      );
-    function createRelation(col, refIsUpper) {
-      const ref = Number(col.ref_document_id);
-      emit("create-relation", refIsUpper ? { upper: ref, lower: props.selfId } : { upper: props.selfId, lower: ref });
+    // 関連表: 上位側・下位側のキーの列
+    const linkCol = (role) => props.model.columns.find((c) => c.type === "string" && c.linkRole === role);
+    const linkPair = Vue.computed(() => {
+      const up = linkCol("upper"), lo = linkCol("lower");
+      return up?.ref_document_id && lo?.ref_document_id ? { upper: Number(up.ref_document_id), lower: Number(lo.ref_document_id) } : null;
+    });
+    const isLinkModel = Vue.computed(() => props.model.columns.some((c) => c.type === "string" && c.linkRole));
+    // 関連表の上位側 → 下位側の文書の間にトレース関係があるか（無いと取り込めない）
+    const pairHasRelation = Vue.computed(
+      () => !linkPair.value || props.relations.some((r) => r.upper_doc_id === linkPair.value.upper && r.lower_doc_id === linkPair.value.lower)
+    );
+    function createRelation() {
+      emit("create-relation", linkPair.value);
+    }
+    function onRoleChange(col) {
+      if (!col.linkRole) col.ref_document_id = "";
+      changed();
     }
 
     const loadingValues = Vue.ref(null);
@@ -300,12 +317,22 @@ export default {
     return {
       types, add, remove, move, sorter, onTypeChange, otherDocs, usedBy, freeHeaders, usedHeaders, missing, changed,
       bulkOpen, bulkText, bulkDelim, bulkCustom, bulkPreview, addBulk,
-      docName, hasRelation, createRelation, loadingValues, toEnum, formatAutoId,
+      docName, linkPair, isLinkModel, pairHasRelation, createRelation, onRoleChange, loadingValues, toEnum, formatAutoId,
       IMPORTANCE_LABEL, WIDTH_LABEL, previewOpen, previewCols, previewId,
     };
   },
   template: `
     <div class="schema-editor">
+      <div v-if="isLinkModel" class="link-table-note">
+        <b>この文書は関連表です。</b>
+        各行の「上位側のキー」の項目 → 「下位側のキー」の項目のつながり（リンク）を作ります。キーがリスト形式なら、すべての組み合わせをつなぎます。
+        上位側と下位側に同じ文書を選ぶと、その文書内のつながり（画面遷移など）になります。
+        <div v-if="linkPair && !pairHasRelation" class="relation-warn">
+          <template v-if="linkPair.upper === linkPair.lower">「{{ docName(linkPair.upper) }}」内のトレース関係がありません（関係が無いと取り込めません）。</template>
+          <template v-else>「{{ docName(linkPair.upper) }}」→「{{ docName(linkPair.lower) }}」のトレース関係がありません（関係が無いと取り込めません）。</template>
+          <button class="btn small primary" @click="createRelation">関係を登録</button>
+        </div>
+      </div>
       <div class="layout-preview">
         <button class="btn small" @click="previewOpen = !previewOpen">{{ previewOpen ? '▾' : '▸' }} レイアウトのプレビュー（横並び表示のカード）</button>
         <template v-if="previewOpen">
@@ -394,23 +421,30 @@ export default {
                 <label class="check"><input type="checkbox" v-model="col.delimNewline" @change="changed"> 改行</label>
                 <label class="check"><input type="checkbox" v-model="col.delimTab" @change="changed"> タブ</label>
               </span>
-              <label v-if="col.type === 'string'" class="inline">
+              <label v-if="col.type === 'string'" class="inline" title="関連表（2 つの文書の項目のつながりを表す文書）で、つなぐ項目の ID を書いた列に指定します">
+                関連表のキー
+                <select v-model="col.linkRole" @change="onRoleChange(col)">
+                  <option value="">（キーではない）</option>
+                  <option value="upper">上位側のキー</option>
+                  <option value="lower">下位側のキー</option>
+                </select>
+              </label>
+              <label v-if="col.type === 'string' && col.linkRole" class="inline">
                 参照先
                 <select v-model="col.ref_document_id" @change="changed">
-                  <option value="">（参照 ID 列ではない）</option>
+                  <option value="">（選んでください）</option>
                   <option v-for="d in otherDocs()" :key="d.id" :value="d.id">{{ d.name }}</option>
                 </select>
               </label>
-              <div v-if="col.type === 'string' && col.ref_document_id && !hasRelation(col.ref_document_id)" class="relation-warn">
-                <template v-if="selfId">
-                  「{{ docName(col.ref_document_id) }}」との間にトレース関係がありません（関係が無いと取り込めません）。
-                  <button class="btn small primary" @click="createRelation(col, true)">関係を登録（{{ docName(col.ref_document_id) }} を上位にする）</button>
-                  <button class="btn small" @click="createRelation(col, false)">下位にする</button>
-                </template>
-                <template v-else>文書を作成した後、「{{ docName(col.ref_document_id) }}」との間にトレース関係を登録してください。</template>
-              </div>
+              <label v-if="col.type === 'string'" class="check" title="値を画像ファイルのパスとして扱い、項目一覧・横並び表示で画像を表示します">
+                <input type="checkbox" v-model="col.imageEnabled" @change="changed"> 画像のパス
+              </label>
+              <label v-if="col.type === 'string' && col.imageEnabled" class="inline image-base">
+                基準フォルダ <input v-model="col.imageBase" @input="changed" placeholder="例: D:\\specs\\images"
+                  title="セルには、このフォルダからの相対パス（例: screen\\login.png）を書きます。このフォルダの外の画像は表示しません">
+              </label>
               <EnumValuesEditor v-if="col.type === 'enum'" :values="col.enumValues" @change="changed" />
-              <button v-if="loadValues && (col.type === 'string' || col.type === 'enum') && !col.ref_document_id"
+              <button v-if="loadValues && (col.type === 'string' || col.type === 'enum') && !col.linkRole && !col.imageEnabled"
                       class="btn small" :disabled="loadingValues === col.key" @click="toEnum(col)"
                       title="この列で実際に使われている値だけを選択肢にして、enum に変換します">
                 {{ col.type === 'enum' ? '使われている値で選択肢を作り直す' : '使われている値から enum を作る' }}

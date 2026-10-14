@@ -166,10 +166,9 @@ def save(
             code="version_conflict",
         )
     schema = doc_svc.check_schema(conn, doc_id, schema)
-    for col in colschema.columns(schema):
-        ref = col.get("ref_document_id")
-        if ref is not None and rel_svc.relation_between(conn, doc_id, ref) is None:
-            raise AppError(f"参照 ID 列「{col['name']}」の参照先との間にトレース関係がありません")
+    msg = rel_svc.missing_link_relation(conn, schema)
+    if msg:
+        raise AppError(msg)
     items = build_items(conn, doc_id, schema, rows)
     base_items = ver_svc.load_items(conn, latest["id"])
     idc = colschema.id_column(schema)

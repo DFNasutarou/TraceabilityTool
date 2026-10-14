@@ -23,7 +23,7 @@ def req_schema():
     }
 
 
-def design_schema(req_doc_id):
+def design_schema():
     return {
         "columns": [
             {"key": "did", "name": "設計ID", "source_header": "設計ID", "type": "id"},
@@ -31,10 +31,22 @@ def design_schema(req_doc_id):
             {"key": "dtgt", "name": "対象", "source_header": "対象", "type": "string"},
             {"key": "dtxt", "name": "設計内容", "source_header": "設計内容", "type": "string"},
             {"key": "dimpl", "name": "実装箇所", "source_header": "実装箇所", "type": "string", "list": {"delimiters": [";"]}},
-            {"key": "dref", "name": "上位要件", "source_header": "上位要件", "type": "string",
-             "list": {"delimiters": [";"]}, "ref_document_id": req_doc_id},
+            {"key": "dref", "name": "上位要件", "source_header": "上位要件", "type": "string", "list": {"delimiters": [";"]}},
         ],
         "display_column": "dtgt",
+    }
+
+
+def link_schema(req_doc_id, design_doc_id):
+    """要件-設計対応表（関連表）。詳細設計書の CSV を取り込み、上位要件 → 設計ID のつながりを作る。"""
+    return {
+        "columns": [
+            {"key": "lid", "name": "No", "type": "id", "auto_id": {"prefix": "RD-", "digits": 4, "start": 1}},
+            {"key": "lup", "name": "上位要件", "source_header": "上位要件", "type": "string",
+             "list": {"delimiters": [";"]}, "ref_document_id": req_doc_id, "link_role": "upper"},
+            {"key": "llo", "name": "設計ID", "source_header": "設計ID", "type": "string",
+             "ref_document_id": design_doc_id, "link_role": "lower"},
+        ],
     }
 
 
@@ -53,7 +65,9 @@ def test_project_docs_are_traceable(client):
     des = ok(client.post("/api/documents", json={"name": "詳細設計書"}))["id"]
     rel = ok(client.post("/api/relations", json={"upper_doc_id": req, "lower_doc_id": des}))["id"]
     _import(client, req, DOCS / "要件定義書.csv", req_schema())
-    _import(client, des, DOCS / "詳細設計書.csv", design_schema(req))
+    _import(client, des, DOCS / "詳細設計書.csv", design_schema())
+    link = ok(client.post("/api/documents", json={"name": "要件-設計対応表"}))["id"]
+    _import(client, link, DOCS / "詳細設計書.csv", link_schema(req, des))
 
     ev = ok(client.get(f"/api/trace/{rel}"))
     assert ev["broken"] == [], "存在しない要件 ID を参照している設計があります"

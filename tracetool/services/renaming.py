@@ -18,7 +18,7 @@ from . import documents as doc_svc
 from . import relations as rel_svc
 from . import versions as ver_svc
 
-_LINK_FLAGS = ("manual", "auto_by_upper", "auto_by_lower")
+_LINK_FLAGS = ("manual", "auto_by_table")
 
 
 def _map_ref(value, renames: dict[str, str]):
@@ -49,9 +49,9 @@ def impact(conn: sqlite3.Connection, doc_id: int, renames: dict[str, str]) -> di
     """ID を付け直すと変わるもの（保存前の確認用）。"""
     olds = list(renames)
     links = []
-    for rel in rel_svc.relations_of(conn, doc_id):
-        side = "upper" if rel["upper_doc_id"] == doc_id else "lower"
-        other = rel["lower_doc_id"] if side == "upper" else rel["upper_doc_id"]
+    for rel, as_upper in rel_svc.sides_of(conn, doc_id):
+        side = "upper" if as_upper else "lower"
+        other = rel["lower_doc_id"] if as_upper else rel["upper_doc_id"]
         n = 0
         for i in range(0, len(olds), 500):
             chunk = olds[i : i + 500]
@@ -60,7 +60,10 @@ def impact(conn: sqlite3.Connection, doc_id: int, renames: dict[str, str]) -> di
                 (rel["id"], *chunk),
             ).fetchone()[0]
         if n:
-            links.append({"document": doc_svc.get_document(conn, other)["name"], "count": n})
+            name = doc_svc.get_document(conn, other)["name"]
+            if other == doc_id:
+                name += "（文書内の" + ("下位" if as_upper else "上位") + "へのリンク）"
+            links.append({"document": name, "count": n})
     documents = []
     for d, latest, cols in _referring(conn, doc_id):
         items = [
@@ -80,8 +83,9 @@ def rename_links(conn: sqlite3.Connection, doc_id: int, renames: dict[str, str],
     付け替え先と同じ組のリンクが既にあれば（新しい ID へのリンク切れのリンクなど）、生成元のフラグをまとめて 1 行にする。
     """
     olds = list(renames)
-    for rel in rel_svc.relations_of(conn, doc_id):
-        side = "upper" if rel["upper_doc_id"] == doc_id else "lower"
+    # 文書内の関係（上位も下位もこの文書）では、上位側・下位側の両方を付け替える
+    for rel, as_upper in rel_svc.sides_of(conn, doc_id):
+        side = "upper" if as_upper else "lower"
         rows = []
         for i in range(0, len(olds), 500):
             chunk = olds[i : i + 500]
@@ -109,9 +113,9 @@ def rename_links(conn: sqlite3.Connection, doc_id: int, renames: dict[str, str],
                 # 確認ハッシュは、付け替えた側（元のリンク）の値を優先する（付け替え先は主にリンク切れで、確認の基準を持たない）
                 merged = {f: int(bool(dup[f] or r[f])) for f in _LINK_FLAGS}
                 conn.execute(
-                    "UPDATE links SET manual = ?, auto_by_upper = ?, auto_by_lower = ?, auto_disabled = ?, "
+                    "UPDATE links SET manual = ?, auto_by_table = ?, auto_disabled = ?, "
                     "upper_hash_ack = ?, lower_hash_ack = ? WHERE id = ?",
-                    (merged["manual"], merged["auto_by_upper"], merged["auto_by_lower"],
+                    (merged["manual"], merged["auto_by_table"],
                      int(bool(dup["auto_disabled"] and r["auto_disabled"])),
                      r["upper_hash_ack"] if r["upper_hash_ack"] is not None else dup["upper_hash_ack"],
                      r["lower_hash_ack"] if r["lower_hash_ack"] is not None else dup["lower_hash_ack"],
@@ -136,7 +140,7 @@ def rename_references(
     for d, latest, cols in _referring(conn, doc_id):
         # 書き換えた項目はハッシュが変わるため、その文書が持つすべての関係で確認ハッシュを付け替える
         # （編集した文書との関係だけでなく、例えば下位文書とのリンクも、参照 ID を直しただけで要確認にしない）
-        sides = [(rel["id"], "upper" if rel["upper_doc_id"] == d["id"] else "lower") for rel in rel_svc.relations_of(conn, d["id"])]
+        sides = [(rel["id"], "upper" if as_up else "lower") for rel, as_up in rel_svc.sides_of(conn, d["id"])]
         changed = 0
         for item in ver_svc.load_items(conn, latest["id"]):
             data = dict(item["data"])

@@ -339,18 +339,14 @@ def build(conn: sqlite3.Connection, session: ImportSession, schema: dict) -> Bui
             errors.add("参照先の文書がありません", column=col["name"])
             ref_ids[ref] = set()
             continue
-        if rel_svc.relation_between(conn, session.document_id, ref) is None:
-            ref_name = doc_svc.get_document(conn, ref)["name"]
-            errors.add(
-                f"参照先文書「{ref_name}」との間にトレース関係がありません。"
-                "上の列の設定に表示される「関係を登録」ボタン、または文書一覧の下部「トレース関係」で登録してください",
-                column=col["name"],
-            )
         hashes = ver_svc.latest_hashes(conn, ref)
         if not hashes:
             warnings.add("参照先文書がまだ取り込まれていないため、参照先の存在は確認できません", column=col["name"])
         ref_ids[ref] = set(hashes)
 
+    msg = rel_svc.missing_link_relation(conn, schema)
+    if msg:
+        errors.add(msg)
     if errors.count:
         return BuildResult(schema, [], errors.items, warnings.items, errors.count, warnings.count)
 
