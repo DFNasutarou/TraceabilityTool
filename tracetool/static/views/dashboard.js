@@ -48,6 +48,7 @@ export default {
       return (up?.ref_document_id ? docName(up.ref_document_id) : "?") + " → " + (lo?.ref_document_id ? docName(lo.ref_document_id) : "?");
     }
     const itemDocs = computed(() => docs.value.filter((d) => !linkInfo(d)));
+    const linkDocs = computed(() => docs.value.filter((d) => linkInfo(d)));
     const relName = (r) => (r.relation.upper_doc_id === r.relation.lower_doc_id ? `${r.upper_name}（文書内）` : `${r.upper_name} → ${r.lower_name}`);
     onMounted(async () => {
       dataDir.value = (await api.get("/api/info")).data_dir || "";
@@ -56,7 +57,7 @@ export default {
       await api.post("/api/open-data-dir");
       toast(`保存先フォルダを開きました: ${dataDir.value}`);
     }
-    return { dataDir, openDataDir, linkInfo, itemDocs, relName, docs, relations, newRel, loading, loaded, addRelation, deleteRelation, href, fmtDate, fmtPct, download };
+    return { dataDir, openDataDir, linkInfo, itemDocs, linkDocs, relName, docs, relations, newRel, loading, loaded, addRelation, deleteRelation, href, fmtDate, fmtPct, download };
   },
   template: `
     <section class="page">
@@ -66,24 +67,21 @@ export default {
       </div>
 
       <p v-if="!loaded" class="sub">読み込み中…</p>
-      <p v-else-if="docs.length === 0" class="empty">
+      <p v-else-if="itemDocs.length === 0" class="empty">
         文書がまだありません。「文書を追加」から仕様書・設計書を登録し、表を取り込んでください。
       </p>
       <table v-else class="grid">
         <thead>
           <tr>
             <th>文書</th><th>最新版</th><th class="num">項目数</th>
-            <th class="num" title="上位文書があるのに、上位へのリンクが無い項目">上位なし</th>
-            <th class="num" title="下位文書があるのに、下位へのリンクが無い項目">下位なし</th>
             <th class="num">要確認</th><th class="num">リンク切れ</th><th></th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="d in docs" :key="d.id">
+          <tr v-for="d in itemDocs" :key="d.id">
             <td>
               <a v-if="d.latest" :href="href('/documents/' + d.id + '/items')"><b>{{ d.name }}</b></a>
               <b v-else>{{ d.name }}</b>
-              <span v-if="linkInfo(d)" class="badge link" title="つながりを表す文書。各行から上位 → 下位のリンクを作ります">関連表: {{ linkInfo(d) }}</span>
               <div class="sub">{{ d.description }}</div>
             </td>
             <td>
@@ -94,10 +92,46 @@ export default {
               <span v-else class="sub">未取り込み</span>
             </td>
             <td class="num">{{ d.latest ? d.latest.row_count : '' }}</td>
-            <td class="num"><a v-if="d.trace && d.trace.no_upper" class="warn-text" :href="href('/documents/' + d.id + '/items', {trace: 'no_upper'})">{{ d.trace.no_upper }}</a><span v-else-if="d.trace">0</span></td>
-            <td class="num"><a v-if="d.trace && d.trace.no_lower" class="warn-text" :href="href('/documents/' + d.id + '/items', {trace: 'no_lower'})">{{ d.trace.no_lower }}</a><span v-else-if="d.trace">0</span></td>
             <td class="num"><a v-if="d.trace && d.trace.suspect_items" class="warn-text" :href="href('/documents/' + d.id + '/items', {trace: 'suspect'})">{{ d.trace.suspect_items }}</a><span v-else-if="d.trace">0</span></td>
             <td class="num"><a v-if="d.trace && d.trace.broken_items" class="err-text" :href="href('/documents/' + d.id + '/items', {trace: 'broken'})">{{ d.trace.broken_items }}</a><span v-else-if="d.trace">0</span></td>
+            <td class="row-actions">
+              <a class="btn" :href="href('/documents/' + d.id + '/import')">取り込み</a>
+              <a class="btn" :href="href('/documents/' + d.id + '/versions')" :class="{disabled: !d.version_count}">版・差分</a>
+              <a class="btn" :href="href('/documents/' + d.id + '/settings')">設定</a>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="sub" v-if="loaded && itemDocs.length">リンクの無い項目は、下の「トレース関係」で関係ごとに確認してください（上位・下位の文書が複数ある場合、項目ごとにつながる文書が違うため、文書全体では数えません）。</p>
+    </section>
+
+    <section class="page">
+      <div class="page-head">
+        <h2>関連表</h2>
+        <div class="actions"><a class="btn" :href="href('/documents/new')" title="文書を作り、カラム定義で「関連表のキー」を指定すると関連表になります">＋ 関連表を追加</a></div>
+      </div>
+      <p class="sub">2 つの文書の項目のつながりを表す表です。1 行が「上位の項目 → 下位の項目」のつながり 1 本になり、自動でリンクが作られます。</p>
+      <p v-if="loaded && !linkDocs.length" class="empty">関連表がありません。文書を作り、カラム定義で列を「関連表のキー」（上位側・下位側）にすると関連表になります。</p>
+      <table v-else-if="loaded" class="grid">
+        <thead>
+          <tr><th>関連表</th><th>つなぐ文書（上位 → 下位）</th><th>最新版</th><th class="num">行数</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="d in linkDocs" :key="d.id">
+            <td>
+              <a v-if="d.latest" :href="href('/documents/' + d.id + '/items')"><b>{{ d.name }}</b></a>
+              <b v-else>{{ d.name }}</b>
+              <div class="sub">{{ d.description }}</div>
+            </td>
+            <td>{{ linkInfo(d) }}</td>
+            <td>
+              <template v-if="d.latest">
+                v{{ d.latest.version_no }} <span class="sub">{{ d.latest.label }}</span>
+                <div class="sub">{{ fmtDate(d.latest.imported_at) }}</div>
+              </template>
+              <span v-else class="sub">未取り込み</span>
+            </td>
+            <td class="num">{{ d.latest ? d.latest.row_count : '' }}</td>
             <td class="row-actions">
               <a class="btn" :href="href('/documents/' + d.id + '/import')">取り込み</a>
               <a class="btn" :href="href('/documents/' + d.id + '/versions')" :class="{disabled: !d.version_count}">版・差分</a>

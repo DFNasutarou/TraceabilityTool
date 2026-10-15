@@ -164,8 +164,10 @@ def test_item_summary_with_multiple_relations(client):
     vid = ok(client.get(f"/api/documents/{a}"))["latest_version_id"]
     res = ok(client.get(f"/api/versions/{vid}/items"))
     trace = {i["item_id"]: i["trace"] for i in res["items"]}
-    # A1 は B へのリンクはあるが C へのリンクが無い → 下位なし
-    assert trace["A1"]["no_lower"] is True and trace["A1"]["lower_count"] == 1
+    # A1 は B へのリンクがある（C へのリンクが無くても、下位なしにはしない。関係ごとに足し合わせない）
+    assert trace["A1"]["no_lower"] is False and trace["A1"]["lower_count"] == 1
+    # A2 はどの下位にもリンクが無い → 下位なし
+    assert trace["A2"]["no_lower"] is True
     assert res["has_lower"] is True and res["has_upper"] is False
 
 

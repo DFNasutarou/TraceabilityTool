@@ -138,8 +138,10 @@ def relation_summary(conn: sqlite3.Connection, rel_id: int) -> dict:
 def item_trace_summary(conn: sqlite3.Connection, doc_id: int) -> dict[str, dict]:
     """文書の最新版の項目ごとのトレース状態。
 
-    no_upper: 上位文書があるのに、いずれかの関係で上位へのリンクが無い
-    no_lower: 下位文書があるのに、いずれかの関係で下位へのリンクが無い
+    no_upper: 上位文書があるのに、どの関係にも上位へのリンクが 1 本も無い
+    no_lower: 下位文書があるのに、どの関係にも下位へのリンクが 1 本も無い
+    上位（下位）の文書が複数ある場合、項目ごとにつながる文書が違うのは普通なので、関係ごとの判定を足し合わせない
+    （関係ごとの未トレースは evaluate_relation で見る）。
     結果はキャッシュを共有するので書き換えないこと。
     """
     cache = getattr(conn, "cache", None)
@@ -151,15 +153,12 @@ def item_trace_summary(conn: sqlite3.Connection, doc_id: int) -> dict[str, dict]
         i: {"upper_count": 0, "lower_count": 0, "no_upper": False, "no_lower": False, "suspect": 0, "broken": 0}
         for i in hashes
     }
+    has = {"upper": False, "lower": False}  # 上位・下位の文書があるか
     for rel, as_upper in rel_svc.sides_of(conn, doc_id):
         ev = _evaluate(conn, rel)
         mine = "upper_item_id" if as_upper else "lower_item_id"
-        linked = ev["upper_linked"] if as_upper else ev["lower_linked"]
         count_key = "lower_count" if as_upper else "upper_count"
-        flag_key = "no_lower" if as_upper else "no_upper"
-        for item_id, s in summary.items():
-            if item_id not in linked:
-                s[flag_key] = True
+        has["lower" if as_upper else "upper"] = True
         for link in ev["links"]:
             s = summary.get(link[mine])
             if s is None:
@@ -170,6 +169,9 @@ def item_trace_summary(conn: sqlite3.Connection, doc_id: int) -> dict[str, dict]
             s[count_key] += 1
             if link["status"] == STATUS_SUSPECT:
                 s["suspect"] += 1
+    for s in summary.values():
+        s["no_upper"] = has["upper"] and s["upper_count"] == 0
+        s["no_lower"] = has["lower"] and s["lower_count"] == 0
     if cache is not None:
         cache["eval"][key] = summary
     return summary

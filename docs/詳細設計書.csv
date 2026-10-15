@@ -87,6 +87,8 @@ DAT-22,データモデル,リンクの操作規則,"手動で追加: 行が無�
 元に戻す: auto_disabled=0。
 確認済みにする: 確認ハッシュを両項目の最新版のハッシュで更新する。
 auto_disabled の行は、自動フラグが残っている間は保持する（再取り込み後も無効化を維持する）。",tracetool/services/links.py,F-43;F-45
+DAT-23,データモデル,テーブル: view_presets,"view_presets(id INTEGER PRIMARY KEY AUTOINCREMENT, document_id → documents ON DELETE CASCADE, name TEXT, settings_json TEXT  -- {""hidden"": [""関係ID:upper"" | ""関係ID:lower"", ...], ""min_importance"": low | mid | high, ""wrap"": bool}, is_default INTEGER, created_at TEXT, UNIQUE(document_id, name))
+横並び表示の表示設定のプリセット。文書ごとに is_default = 1 は 1 つだけ。設定は保存時に正規化する（不正な値は既定値）。",tracetool/db.py;tracetool/services/presets.py,F-58
 PRC-01,処理,取り込みセッション,"取り込みはセッション単位で進める。アップロードされたファイルはメモリ上にのみ保持し、ディスクには書かない。
 セッションは確定・取り消し・30 分の無操作で破棄する（60 秒ごとに期限切れを掃除する）。読み込んだ表はセッション内でキャッシュする。",tracetool/importer.py,F-18;C-01
 PRC-02,処理,取り込みの流れ,"1. POST /api/imports: ファイルをアップロード → セッション ID、形式、シート一覧、先頭 30 行の生データ、プレビュー（行番号付き）
@@ -132,7 +134,7 @@ PRC-15,処理,トレースの評価,"トレース関係 (U → L) ごとに、U 
 過去の版を指定した評価は行わない。
 リンクの一覧は、上位文書での並び順 → 下位文書での並び順に並べる（最新版に無い項目は最後）。",tracetool/services/trace.py,F-46;F-50;F-52;X-05;X-06;G-02
 PRC-16,処理,網羅率,網羅率 = （未トレースでない項目数）/（項目数）。上位側・下位側それぞれ計算する。,tracetool/services/trace.py,F-51
-PRC-17,処理,項目ごとのトレース状態,項目に複数の上位文書（または下位文書）がある場合は関係ごとに判定し、「いずれかの関係で未トレース」を未トレース（上位なし・下位なし）とする。上位・下位のリンク数、要確認・リンク切れの数も項目ごとに数える。,tracetool/services/trace.py;tracetool/services/items.py,F-63
+PRC-17,処理,項目ごとのトレース状態,項目ごとに、すべての関係の上位・下位のリンク数（リンク切れを除く）、要確認・リンク切れの数を数える。上位なし = 上位の文書がある（その文書が下位側の関係がある）のに、上位へのリンク数が 0。下位なし も同様。関係ごとに判定して足し合わせない（上位の文書が複数ある場合、項目ごとにつながる文書が違うため）。,tracetool/services/trace.py;tracetool/services/items.py,F-63
 PRC-18,処理,差分（列）,版 A（旧）と版 B（新）の列を列キーで比較し、追加 / 削除 / 名前変更 / 型変更を求める。,tracetool/services/diff.py,F-31;F-06
 PRC-19,処理,差分（項目）,"項目を ID で比較する。B にのみある → 追加、A にのみある → 削除、両方にありハッシュが異なる → 変更（値が異なる列キーとその前後の値）、ハッシュが同じ → 変更なし。
 値の比較は型を含めて行う（Python では 1 == True のため、JSON 表現で比べる）。",tracetool/services/diff.py,F-31
@@ -169,7 +171,7 @@ PRC-31,処理,版の整理,POST /api/versions/{vid}/make-first: 選んだ版以�
 PRC-32,処理,画像の表示,GET /api/image?doc=&key=&path=: 文書の作業中のカラム定義で画像の列（image.base_dir）に指定した基準フォルダと、セルの値（相対パス。\ は / とみなす）からファイルを求め、実体のパス（リンクをたどった先）が基準フォルダの下にあり、拡張子が画像（png / jpg / jpeg / gif / bmp / webp）の場合だけ返す。SVG はスクリプトを含み得るため対象外。他のサイトの画面から読み込ませないよう、Sec-Fetch-Site が same-origin / none 以外ならエラーにする。基準フォルダは絶対パスでなければカラム定義の誤りにする。,tracetool/images.py;tracetool/app.py;tracetool/colschema.py,F-59;C-01
 API-01,API,共通,"すべて JSON。パスの接頭辞は /api。本文は型付きモデル（Pydantic）で受け取る。
 エラーは {""error"": {""code"": ""..."", ""message"": ""日本語のメッセージ""}} で返す。項目 ID はパスではなくクエリで渡す（ID に / などが含まれ得るため）。",tracetool/app.py,C-02;N-05
-API-02,API,GET /documents,文書一覧（最新版、版の数、上位なし・下位なし・要確認・リンク切れの件数を含む）。,tracetool/app.py,F-60
+API-02,API,GET /documents,文書一覧（最新版、版の数、作業中のカラム定義、要確認・リンク切れの件数を含む）。,tracetool/app.py,F-60
 API-03,API,POST /documents,文書を作成する（名前、説明、カラム定義）。カラム定義は空でもよい。,tracetool/app.py;tracetool/services/documents.py,F-01;F-02
 API-04,API,GET /documents/{id},文書の詳細（作業中のカラム定義、最新版 ID、この文書を参照している文書名を含む）。,tracetool/app.py,F-02
 API-05,API,PUT /documents/{id},名前・説明・カラム定義を更新する。schema・description を省略した場合は既存の値を維持する。,tracetool/app.py;tracetool/services/documents.py,F-01;F-02;F-05
@@ -201,12 +203,13 @@ API-29,API,表示用のカラム定義,横並び表示・項目一覧に返す�
 API-30,API,POST /documents/{id}/edit,"編集モードの保存（PRC-28）。本文: base_version_id、base_stamp（latest-items の stamp）、mode（new / overwrite）、schema、items（[{orig_id: 編集を始めたときの ID（追加した行は null）, data: {列キー: 値}}]。並び順のとおりに保存）、label。応答: version_id、version_no、mode、renamed（付け直した ID の数）。",tracetool/app.py;tracetool/services/editing.py,F-80;F-82
 API-31,API,POST /documents/{id}/rename-impact,"ID を付け直すと変わるもの（PRC-30）。本文: renames（{古い ID: 新しい ID}）。応答: links（[{document, count}]）、documents（[{document, version_no, count, items（先頭 20 件）}]）。読み取りのみ。",tracetool/app.py;tracetool/services/editing.py;tracetool/services/renaming.py,F-83
 API-32,API,GET /info、POST /open-data-dir,GET /info: データフォルダのパスを返す。POST /open-data-dir: データフォルダを OS のファイル管理画面で開く（Windows: os.startfile、macOS: open、Linux: xdg-open）。開くのは起動時に決まったデータフォルダだけで、画面から渡された値は使わない（127.0.0.1 だけで待ち受けるため、サーバの PC = 画面を操作している PC）。状態を変える要求と同じく Origin の検査を受ける。開けない場合はパスを添えたエラーにする。,tracetool/app.py;tracetool/opener.py;tracetool/__main__.py,F-24;N-03
+API-33,API,プリセット,GET /documents/{id}/presets（名前順）、POST /documents/{id}/presets（name、settings、is_default）、PUT /presets/{pid}（name・settings・is_default のうち指定したものだけ変える。既定にすると同じ文書の他のプリセットは既定でなくなる）、DELETE /presets/{pid}。名前の空・重複はエラー。,tracetool/app.py;tracetool/services/presets.py,F-58
 UI-01,画面,共通,"ハッシュ形式のルーティング（#/documents/3/items など）で、1 枚の HTML 内で画面を切り替える。エラーは画面右下にトースト表示する。文言はすべて日本語。
 出力ボタンは、ファイルを取得してからブラウザに保存させ、「作成しています」「ダウンロードしました: ファイル名」を通知する（失敗したらエラーを通知する）。表が画面に収まらない場合は、その枠の中だけで横スクロールする（ページ全体ははみ出さない）。
 通知は同時に 4 件までとし、古いものから消す。出力の「作成しています」は結果の通知に置き換える。リスト形式の値は、その列の区切り文字（改行・タブ・空白以外の最初のもの）で区切って表示する。",tracetool/static/app.js;tracetool/static/router.js;tracetool/static/api.js;tracetool/static/style.css,N-05;F-70;F-71
-UI-02,画面,S1 ダッシュボード,"文書の一覧（最新版、項目数、上位なし・下位なし・要確認・リンク切れの件数。件数をクリックすると S4 を絞り込んで開く）。
+UI-02,画面,S1 ダッシュボード,"文書の一覧（最新版、項目数、要確認・リンク切れの件数。件数をクリックすると S4 を絞り込んで開く。文書ごとの上位なし・下位なしは出さず、関係ごとに見るよう案内する）。関連表は別枠の一覧（関連表、つなぐ文書（上位 → 下位、文書内なら「A 内」）、最新版、行数）に出す。
 トレース関係を「上位 → 下位」の一覧で表示し、各関係の網羅率を表示する。関係の追加・削除と、全関係の未トレース一覧の出力（Excel / CSV）もこの画面で行う。
-初回の読み込みが終わるまでは「読み込み中…」と表示し、「文書がありません」「関係がありません」を出さない。トレース関係の表は関係名を 1 列にまとめ、関係名を押すとトレース状況を開く（狭い画面でもはみ出しにくくする）。関連表の文書には「関連表: A → B」（文書内なら「A 内」）の印を付ける。関係の登録では関連表を選べず、上位と下位に同じ文書を選ぶと文書内の関係になる（文書内の関係は「A（文書内）」と表示する）。
+初回の読み込みが終わるまでは「読み込み中…」と表示し、「文書がありません」「関係がありません」を出さない。トレース関係の表は関係名を 1 列にまとめ、関係名を押すとトレース状況を開く（狭い画面でもはみ出しにくくする）。関係の登録では関連表を選べず、上位と下位に同じ文書を選ぶと文書内の関係になる（文書内の関係は「A（文書内）」と表示する）。
 上部の帯の右端に「保存先フォルダを開く」ボタン（パスはボタンの説明に出す）を置き、文書一覧の下部にデータの保存先のパスと「フォルダを開く」ボタン、ツールを差し替えてもデータが残ることを示す。",tracetool/static/views/dashboard.js;tracetool/static/app.js,F-60;F-51;F-40;F-71;F-24
 UI-03,画面,S2 文書の設定,"名前・説明。カラム定義の編集（列の追加・削除・並べ替え（⋮⋮ のつまみをドラッグ＆ドロップ、または ↑↓）、型、リスト形式と区切り文字、enum の選択肢、bool の真偽文字列、参照先文書、表示列）。文書の削除。
 詳細設定の内容が増えても、列名の入力欄は幅を固定して縮めない。
@@ -237,7 +240,8 @@ UI-10,画面,S9 横並び表示,"#/documents/{id}/side?item= で開く。「上�
 「列名の後で改行」の列は、列名の行（長い列名は折り返す）の右端に ‹ › を置き、その下に値を置く。改行しない列は、列名を左（最大 9em か欄の 35%。長い列名は途中で省略し、全体は説明に出す）、値を右に置き、‹ › は値の末尾に置く。
 上部の「表示する列」で、カードに出す列を重要度で絞る（すべて（低以上）・中以上・高のみ。ID は常に出す。ブラウザに記憶し、上位・この文書・下位のすべてのカードに当てはめる）。
 「折り返して全文を表示」を外すと、各値を 1 行に収まる分だけ表示する（ブラウザに記憶）。リスト形式の値は 1 つ目を表示し、‹ › で切り替える（押してもカードは選ばない）。
-上位・下位のカードの ID を押すと、その項目の文書の横並び表示に切り替える。「前の項目」「次の項目」（Alt + ← / →）で同じ文書の項目を順に選ぶ。上位・下位が複数ある場合は縦に並べ、列ごとにスクロールする。画面の幅が狭くても 3 列を保ち（1 列あたり最小 260px）、収まらない分は横にスクロールする。項目詳細（S5）の「上位・下位と横並びで見る」から開く。",tracetool/static/views/side.js;tracetool/static/views/items.js;tracetool/static/views/cells.js,F-65;F-62;F-66;F-67;F-68;F-69
+上位・下位のカードの ID を押すと、その項目の文書の横並び表示に切り替える。「前の項目」「次の項目」（Alt + ← / →）で同じ文書の項目を順に選ぶ。上位・下位が複数ある場合は縦に並べ、列ごとにスクロールする。画面の幅が狭くても 3 列を保ち（1 列あたり最小 260px）、収まらない分は横にスクロールする。項目詳細（S5）の「上位・下位と横並びで見る」から開く。
+上部の帯に「表示する文書」（上位・下位のグループ（関係と向き）ごとのチェック。非表示の数をボタンに出す。文書ごとにブラウザに記憶）、「表示する列」、「折り返して全文を表示」と、プリセット（選ぶと表示設定を当てはめる。今の設定と違えば「変更あり」。新しく保存・上書き保存・既定にする／外す・削除）を置く。既定のプリセットがあれば、横並び表示を開いたときにそれを当てはめる。表示する文書をすべて外した列には、その旨を表示する。",tracetool/static/views/side.js;tracetool/static/views/items.js;tracetool/static/views/cells.js,F-65;F-62;F-66;F-67;F-68;F-69;F-58
 UI-11,画面,確認ダイアログの方針,確認ダイアログは、元に戻せない削除（文書・版・トレース関係）と、編集モードで変更を破棄するときだけに出す。enum への変換、リンクの削除・無効化などは確認せずに実行し、結果を画面右下の通知で知らせる（自動リンクの無効化は「元に戻す」で戻せる）。,tracetool/static/views/schema-editor.js;tracetool/static/views/items.js,N-07
 UI-12,画面,S4 項目一覧の編集モード,"最新版の全項目を表で示し（500 件ずつ。長い値は折り返す）、セルを押すとその場で編集する（Esc で閉じる）。文字列・番号は入力欄（リスト形式は 1 行に 1 つ）、enum・bool は選択肢（リスト形式はチェックボックス）。選択肢に無い既存の値も残して選べる。enum は「＋ 選択肢を追加」で選択肢を足してその値にする。
 変更したセル・追加した行・削除する行（取り消し線。「戻す」で戻せる）を色で示し、変更・追加・削除の件数を上部に出す。取り込み済みの項目の ID を編集するときは、元の ID と「リンクと参照している ID もすべて付け直す」ことを編集欄に示し、変えた ID は「古い ID → 新しい ID」と表示する。ID が重複している場合と、編集前に別の項目で使われていた ID に変えた場合は示して保存できなくする。

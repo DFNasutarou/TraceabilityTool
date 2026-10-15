@@ -364,3 +364,8 @@ ul.links li.inactive > a, ul.links li.inactive > span:not(.link-actions) { opaci
 .cell-img { display: block; max-width: 100%; max-height: 220px; object-fit: contain; border: 1px solid var(--line); border-radius: 4px; background: var(--head); }
 .items-table .cell-img { max-height: 60px; max-width: 160px; }
 .img-error { color: var(--warn); font-size: 12px; }
+
+/* 横並び表示: 表示する文書・プリセット */
+.side-toolbar { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; background: var(--head); }
+.side-toolbar .btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-weak); }
+.side-toolbar .choice-pop { min-width: 260px; }

@@ -23,6 +23,7 @@ from .services import editing as edit_svc
 from .services import export as export_svc
 from .services import items as items_svc
 from .services import links as link_svc
+from .services import presets as preset_svc
 from .services import relations as rel_svc
 from .services import trace as trace_svc
 from .services import versions as ver_svc
@@ -112,6 +113,12 @@ class EditIn(_Body):
 
 class RenamesIn(_Body):
     renames: dict[str, str]  # 古い ID → 新しい ID
+
+
+class PresetIn(_Body):
+    name: str | None = None
+    settings: dict | None = None
+    is_default: bool | None = None
 
 
 class ColumnIn(_Body):
@@ -282,6 +289,31 @@ def create_app(
         # 読み取りだけだが、ID の一覧が長くなり得るため本文で受け取る
         with db.read() as conn:
             return edit_svc.rename_impact(conn, doc_id, body.renames)
+
+    # --- 横並び表示のプリセット ---------------------------------------------
+
+    @app.get("/api/documents/{doc_id}/presets")
+    def list_presets(doc_id: int):
+        with db.read() as conn:
+            return preset_svc.list_presets(conn, doc_id)
+
+    @app.post("/api/documents/{doc_id}/presets")
+    def create_preset(doc_id: int, body: PresetIn):
+        with db.tx() as conn:
+            pid = preset_svc.create_preset(conn, doc_id, body.name or "", body.settings or {}, bool(body.is_default))
+        return {"id": pid}
+
+    @app.put("/api/presets/{pid}")
+    def update_preset(pid: int, body: PresetIn):
+        with db.tx() as conn:
+            preset_svc.update_preset(conn, pid, body.name, body.settings, body.is_default)
+        return {"ok": True}
+
+    @app.delete("/api/presets/{pid}")
+    def delete_preset(pid: int):
+        with db.tx() as conn:
+            preset_svc.delete_preset(conn, pid)
+        return {"ok": True}
 
     @app.get("/api/documents/{doc_id}/neighborhood")
     def item_neighborhood(doc_id: int, id: str):
